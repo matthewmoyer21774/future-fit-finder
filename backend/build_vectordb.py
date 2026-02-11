@@ -26,6 +26,8 @@ def load_programmes():
             data = json.load(f)
 
         # Skip files that had errors during scraping
+        if not isinstance(data, dict):
+            continue
         if "error" in data:
             continue
 
