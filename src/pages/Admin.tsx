@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { GraduationCap, Lock, ChevronDown, ChevronUp, Mail, User, Briefcase, Calendar, CheckCircle2 } from "lucide-react";
+import { GraduationCap, Lock, ChevronDown, ChevronUp, Mail, User, Briefcase, Calendar, CheckCircle2, Database, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
+import rawProgrammeData from "../../programme_pages/programmes_database.json";
 
 interface Submission {
   id: string;
@@ -37,6 +38,7 @@ const Admin = () => {
   const [password, setPassword] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -109,6 +111,27 @@ const Admin = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={seeding}
+              onClick={async () => {
+                setSeeding(true);
+                try {
+                  const { data, error } = await supabase.functions.invoke("seed-programmes", {
+                    body: { programmes: rawProgrammeData, admin_password: password },
+                  });
+                  if (error) throw new Error(data?.error || error.message);
+                  toast({ title: "Database seeded", description: `${data.inserted} programmes inserted.` });
+                } catch (e: any) {
+                  toast({ title: "Seed failed", description: e.message, variant: "destructive" });
+                } finally {
+                  setSeeding(false);
+                }
+              }}
+            >
+              {seeding ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Seeding...</> : <><Database className="mr-2 h-4 w-4" /> Seed Programmes</>}
+            </Button>
             <Link to="/admin/architecture">
               <Button variant="outline" size="sm">🔬 Architecture</Button>
             </Link>
