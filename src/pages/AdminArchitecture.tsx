@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   GraduationCap,
@@ -12,12 +12,15 @@ import {
   Upload,
   Send,
   Database,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Link } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 
 interface PipelineNode {
   id: string;
@@ -26,7 +29,7 @@ interface PipelineNode {
   description: string;
   icon: React.ReactNode;
   sampleOutput: string;
-  duration: number; // ms to simulate
+  duration: number;
 }
 
 const pipelineNodes: PipelineNode[] = [
@@ -63,9 +66,9 @@ const pipelineNodes: PipelineNode[] = [
   {
     id: "classify",
     label: "Zero-Shot Classification",
-    tech: "facebook/bart-large-mnli",
+    tech: "GPT-4o-mini",
     description:
-      "BART model classifies career interests into programme categories without training data",
+      "LLM classifies career interests into programme categories via zero-shot prompting",
     icon: <Sparkles className="h-5 w-5" />,
     sampleOutput:
       "Top categories: Marketing & Sales (87%), People Management & Leadership (72%), Strategy (65%)",
@@ -74,9 +77,9 @@ const pipelineNodes: PipelineNode[] = [
   {
     id: "search",
     label: "Vector Search",
-    tech: "ChromaDB + all-MiniLM-L6-v2",
+    tech: "ChromaDB + text-embedding-3-small",
     description:
-      "Semantic search across 61 programme embeddings using sentence-transformers",
+      "Semantic search across 61 programme embeddings using OpenAI embeddings",
     icon: <Database className="h-5 w-5" />,
     sampleOutput:
       "Top 8 matches: Brand Management (0.89), Sales Leadership (0.85), Digital Marketing & AI (0.83), Excellence in Sales (0.81)...",
@@ -112,17 +115,40 @@ const AdminArchitecture = () => {
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, NodeStatus>>(
     () => Object.fromEntries(pipelineNodes.map((n) => [n.id, "idle"]))
   );
+  const [nodeOutputs, setNodeOutputs] = useState<Record<string, string>>({});
   const [running, setRunning] = useState(false);
   const [activeNodeIndex, setActiveNodeIndex] = useState(-1);
   const [progress, setProgress] = useState(0);
+  const [backendStatus, setBackendStatus] = useState<"unknown" | "online" | "offline">("unknown");
+  const [isLive, setIsLive] = useState(false);
 
   const resetPipeline = () => {
     setNodeStatuses(
       Object.fromEntries(pipelineNodes.map((n) => [n.id, "idle"]))
     );
+    setNodeOutputs({});
     setActiveNodeIndex(-1);
     setRunning(false);
     setProgress(0);
+  };
+
+  const animateNode = async (index: number, totalDuration: number, elapsedRef: { value: number }, output?: string) => {
+    const node = pipelineNodes[index];
+    setActiveNodeIndex(index);
+    setNodeStatuses((prev) => ({ ...prev, [node.id]: "active" }));
+
+    const steps = 20;
+    const stepDuration = node.duration / steps;
+    for (let s = 0; s < steps; s++) {
+      await new Promise((r) => setTimeout(r, stepDuration));
+      elapsedRef.value += stepDuration;
+      setProgress(Math.round((elapsedRef.value / totalDuration) * 100));
+    }
+
+    if (output) {
+      setNodeOutputs((prev) => ({ ...prev, [node.id]: output }));
+    }
+    setNodeStatuses((prev) => ({ ...prev, [node.id]: "done" }));
   };
 
   const runDemo = async () => {
@@ -130,24 +156,66 @@ const AdminArchitecture = () => {
     setRunning(true);
 
     const totalDuration = pipelineNodes.reduce((s, n) => s + n.duration, 0);
-    let elapsed = 0;
+    const elapsedRef = { value: 0 };
 
-    for (let i = 0; i < pipelineNodes.length; i++) {
-      const node = pipelineNodes[i];
-      setActiveNodeIndex(i);
-      setNodeStatuses((prev) => ({ ...prev, [node.id]: "active" }));
-
-      // Animate progress during this node
-      const steps = 20;
-      const stepDuration = node.duration / steps;
-      for (let s = 0; s < steps; s++) {
-        await new Promise((r) => setTimeout(r, stepDuration));
-        elapsed += stepDuration;
-        setProgress(Math.round((elapsed / totalDuration) * 100));
+    // Try live backend first
+    let liveData: any = null;
+    try {
+      const { data, error } = await supabase.functions.invoke("backend-proxy", {
+        body: {
+          career_goals: "Transition from Senior Marketing Manager to CMO role, with focus on digital transformation and brand strategy in FMCG industry",
+        },
+      });
+      if (!error && data && !data.error && data.recommendations?.length > 0) {
+        liveData = data;
+        setIsLive(true);
+        setBackendStatus("online");
+      } else {
+        setBackendStatus("offline");
       }
-
-      setNodeStatuses((prev) => ({ ...prev, [node.id]: "done" }));
+    } catch {
+      setBackendStatus("offline");
     }
+
+    // Animate through each node
+    // Node 0: Input
+    await animateNode(0, totalDuration, elapsedRef,
+      liveData ? "Sent career goals text to Railway backend (live)" : undefined
+    );
+
+    // Node 1: Parse
+    await animateNode(1, totalDuration, elapsedRef);
+
+    // Node 2: Profile
+    await animateNode(2, totalDuration, elapsedRef,
+      liveData?.profile
+        ? `{ name: "${liveData.profile.name || "N/A"}", current_role: "${liveData.profile.current_role || "N/A"}", industry: "${liveData.profile.industry || "N/A"}", skills: [${(liveData.profile.skills || []).slice(0, 3).map((s: string) => `"${s}"`).join(", ")}] }`
+        : undefined
+    );
+
+    // Node 3: Classify
+    await animateNode(3, totalDuration, elapsedRef,
+      liveData?.topCategories?.length
+        ? `Top categories: ${liveData.topCategories.map((c: any) => `${c.category} (${Math.round(c.score * 100)}%)`).join(", ")}`
+        : undefined
+    );
+
+    // Node 4: Vector search
+    await animateNode(4, totalDuration, elapsedRef);
+
+    // Node 5: Synthesis
+    await animateNode(5, totalDuration, elapsedRef,
+      liveData?.recommendations?.length
+        ? `Generated: ${liveData.recommendations.length} recommendations with personalised reasoning + outreach email (${liveData.outreachEmail?.length || 0} chars)`
+        : undefined
+    );
+
+    // Node 6: Output
+    await animateNode(6, totalDuration, elapsedRef,
+      liveData?.recommendations?.length
+        ? `Response: { recommendations: [${liveData.recommendations.map((r: any) => `"${r.programmeTitle}"`).join(", ")}], email_draft: '...' }`
+        : undefined
+    );
 
     setActiveNodeIndex(pipelineNodes.length);
     setProgress(100);
@@ -213,10 +281,24 @@ const AdminArchitecture = () => {
           >
             RAG Recommendation Pipeline
           </motion.h1>
-          <p className="mb-6 text-muted-foreground">
+           <p className="mb-4 text-muted-foreground">
             Python FastAPI backend deployed on Railway — full NLP pipeline
             visualization
           </p>
+
+          {backendStatus !== "unknown" && (
+            <div className="mb-4 flex items-center justify-center gap-2">
+              {backendStatus === "online" ? (
+                <Badge className="bg-green-500/20 text-green-700 border-green-500/30 gap-1">
+                  <Wifi className="h-3 w-3" /> Railway Backend Online — Live Data
+                </Badge>
+              ) : (
+                <Badge variant="secondary" className="gap-1">
+                  <WifiOff className="h-3 w-3" /> Railway Offline — Using Sample Data
+                </Badge>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center justify-center gap-3">
             <Button
@@ -226,7 +308,7 @@ const AdminArchitecture = () => {
               size="lg"
             >
               <Play className="h-4 w-4" />
-              {running ? "Running..." : "Run Demo"}
+              {running ? "Calling Railway..." : "Run Demo"}
             </Button>
             <Button
               onClick={resetPipeline}
@@ -318,8 +400,11 @@ const AdminArchitecture = () => {
                             >
                               <div className="mt-3 rounded-lg bg-card border border-border p-3">
                                 <p className="text-xs font-mono text-muted-foreground leading-relaxed break-all">
-                                  {node.sampleOutput}
+                                  {nodeOutputs[node.id] || node.sampleOutput}
                                 </p>
+                                {nodeOutputs[node.id] && isLive && (
+                                  <Badge variant="outline" className="mt-1 text-[10px]">LIVE</Badge>
+                                )}
                               </div>
                             </motion.div>
                           )}
@@ -366,7 +451,7 @@ const AdminArchitecture = () => {
                   { name: "PyPDF / python-docx", role: "Document Parsing" },
                   { name: "GPT-4o-mini", role: "Profile + RAG Synthesis" },
                   {
-                    name: "BART (bart-large-mnli)",
+                    name: "GPT-4o-mini",
                     role: "Zero-Shot Classification",
                   },
                   {
@@ -374,8 +459,8 @@ const AdminArchitecture = () => {
                     role: "Vector Store (61 programmes)",
                   },
                   {
-                    name: "all-MiniLM-L6-v2",
-                    role: "Sentence Embeddings",
+                    name: "text-embedding-3-small",
+                    role: "OpenAI Embeddings",
                   },
                   { name: "Railway", role: "Deployment Platform" },
                   { name: "React + Framer Motion", role: "Frontend" },

@@ -39,22 +39,37 @@ app.add_middleware(
 PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
 
 
+startup_error = ""
+
 @app.on_event("startup")
 def startup():
     def build():
-        global is_ready
-        try:
-            build_db()
-            is_ready = True
-            print("Vector DB ready!")
-        except Exception as e:
-            print(f"Vector DB build failed: {e}")
+        global is_ready, startup_error
+        MAX_RETRIES = 3
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                print(f"Vector DB build attempt {attempt}/{MAX_RETRIES}...")
+                build_db()
+                is_ready = True
+                print("Vector DB ready!")
+                return
+            except Exception as e:
+                startup_error = str(e)
+                print(f"Vector DB build attempt {attempt} failed: {e}")
+                if attempt < MAX_RETRIES:
+                    import time
+                    time.sleep(2 ** attempt)
+        print("All vector DB build attempts failed. Server running without vector DB.")
     threading.Thread(target=build, daemon=True).start()
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ready": is_ready}
+    return {
+        "status": "ok" if is_ready else "starting",
+        "ready": is_ready,
+        "error": startup_error if startup_error and not is_ready else None,
+    }
 
 
 @app.get("/programmes")
