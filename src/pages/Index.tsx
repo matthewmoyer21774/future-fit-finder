@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Upload, FileText, PenLine, ArrowRight, GraduationCap } from "lucide-react";
+import { Upload, FileText, PenLine, ArrowRight, GraduationCap, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { useNavigate } from "react-router-dom";
-import { Link } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { programmes } from "@/data/programmes";
 
 interface ProfileData {
   jobTitle: string;
@@ -16,15 +18,16 @@ interface ProfileData {
   yearsExperience: string;
   careerGoals: string;
   areasOfInterest: string;
-  cvText?: string;
-  linkedinText?: string;
 }
 
 const Index = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("form");
   const [cvFile, setCvFile] = useState<File | null>(null);
   const [linkedinText, setLinkedinText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState("");
   const [formData, setFormData] = useState<ProfileData>({
     jobTitle: "",
     industry: "",
@@ -37,26 +40,82 @@ const Index = () => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleSubmit = () => {
-    // TODO: Send to AI recommendation engine
-    const profilePayload = {
-      ...formData,
-      linkedinText: linkedinText || undefined,
-      cvFileName: cvFile?.name || undefined,
-    };
-    console.log("Profile submitted:", profilePayload);
-    // navigate("/results", { state: { profile: profilePayload } });
+  const handleSubmit = async () => {
+    setLoading(true);
+    try {
+      let profile: Record<string, string>;
+
+      if (activeTab === "cv" && cvFile) {
+        // Step 1: Parse CV
+        setLoadingMessage("Analyzing your CV...");
+        const formDataUpload = new FormData();
+        formDataUpload.append("file", cvFile);
+
+        const parseRes = await fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-cv`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            },
+            body: formDataUpload,
+          }
+        );
+
+        if (!parseRes.ok) {
+          const err = await parseRes.json();
+          throw new Error(err.error || "Failed to parse CV");
+        }
+
+        const { profile: cvProfile } = await parseRes.json();
+        profile = cvProfile;
+      } else if (activeTab === "linkedin" && linkedinText) {
+        // Treat LinkedIn text as a mini-CV
+        profile = {
+          jobTitle: "",
+          industry: "",
+          yearsExperience: "",
+          careerGoals: linkedinText,
+          areasOfInterest: "",
+        };
+      } else {
+        profile = { ...formData };
+      }
+
+      // Step 2: Build compact catalogue for the AI
+      const catalogue = programmes.map((p) =>
+        `---\nTitle: ${p.name}\nCategory: ${p.category}\nFee: ${p.fee}\nFormat: ${p.duration}\nLocation: ${p.location}\nStart: ${p.startDate}\nURL: ${p.url}\nDescription: ${p.description.slice(0, 300)}\nTarget: ${p.targetAudience}\nWhy: ${p.whyThisProgramme.slice(0, 200)}`
+      ).join("\n");
+
+      // Step 3: Get recommendations
+      setLoadingMessage("Finding your perfect programmes...");
+      const { data, error } = await supabase.functions.invoke("recommend", {
+        body: { profile, catalogue },
+      });
+
+      if (error) throw new Error(error.message || "Failed to get recommendations");
+
+      navigate("/results", { state: data });
+    } catch (e: any) {
+      console.error("Submit error:", e);
+      toast({
+        title: "Something went wrong",
+        description: e.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+      setLoadingMessage("");
+    }
   };
 
   const hasInput =
-    formData.jobTitle ||
-    formData.careerGoals ||
-    linkedinText ||
-    cvFile;
+    (activeTab === "form" && (formData.jobTitle || formData.careerGoals)) ||
+    (activeTab === "cv" && cvFile) ||
+    (activeTab === "linkedin" && linkedinText);
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto flex items-center justify-between px-4 py-4">
           <div className="flex items-center gap-3">
@@ -69,23 +128,15 @@ const Index = () => {
             </div>
           </div>
           <Link to="/programmes">
-            <Button variant="outline" size="sm">
-              Browse Programmes
-            </Button>
+            <Button variant="outline" size="sm">Browse Programmes</Button>
           </Link>
         </div>
       </header>
 
-      {/* Hero */}
       <section className="container mx-auto px-4 py-16 text-center">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
           <h1 className="mb-4 text-4xl font-bold text-foreground md:text-5xl lg:text-6xl">
-            Find Your Perfect{" "}
-            <span className="text-primary">Programme</span>
+            Find Your Perfect <span className="text-primary">Programme</span>
           </h1>
           <p className="mx-auto mb-12 max-w-2xl text-lg text-muted-foreground">
             Tell us about your career and goals — our AI advisor will match you
@@ -93,7 +144,6 @@ const Index = () => {
           </p>
         </motion.div>
 
-        {/* Input Section */}
         <motion.div
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
@@ -108,16 +158,13 @@ const Index = () => {
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList className="mb-6 w-full">
                   <TabsTrigger value="form" className="flex-1 gap-2">
-                    <PenLine className="h-4 w-4" />
-                    Manual Form
+                    <PenLine className="h-4 w-4" /> Manual Form
                   </TabsTrigger>
                   <TabsTrigger value="cv" className="flex-1 gap-2">
-                    <Upload className="h-4 w-4" />
-                    Upload CV
+                    <Upload className="h-4 w-4" /> Upload CV
                   </TabsTrigger>
                   <TabsTrigger value="linkedin" className="flex-1 gap-2">
-                    <FileText className="h-4 w-4" />
-                    LinkedIn
+                    <FileText className="h-4 w-4" /> LinkedIn
                   </TabsTrigger>
                 </TabsList>
 
@@ -125,51 +172,24 @@ const Index = () => {
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="jobTitle">Current Job Title</Label>
-                      <Input
-                        id="jobTitle"
-                        placeholder="e.g. Marketing Manager"
-                        value={formData.jobTitle}
-                        onChange={(e) => handleFormChange("jobTitle", e.target.value)}
-                      />
+                      <Input id="jobTitle" placeholder="e.g. Marketing Manager" value={formData.jobTitle} onChange={(e) => handleFormChange("jobTitle", e.target.value)} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="industry">Industry</Label>
-                      <Input
-                        id="industry"
-                        placeholder="e.g. Technology"
-                        value={formData.industry}
-                        onChange={(e) => handleFormChange("industry", e.target.value)}
-                      />
+                      <Input id="industry" placeholder="e.g. Technology" value={formData.industry} onChange={(e) => handleFormChange("industry", e.target.value)} />
                     </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="yearsExperience">Years of Experience</Label>
-                    <Input
-                      id="yearsExperience"
-                      placeholder="e.g. 5"
-                      value={formData.yearsExperience}
-                      onChange={(e) => handleFormChange("yearsExperience", e.target.value)}
-                    />
+                    <Input id="yearsExperience" placeholder="e.g. 5" value={formData.yearsExperience} onChange={(e) => handleFormChange("yearsExperience", e.target.value)} />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="careerGoals">Career Goals</Label>
-                    <Textarea
-                      id="careerGoals"
-                      placeholder="What do you want to achieve in the next 2-3 years?"
-                      value={formData.careerGoals}
-                      onChange={(e) => handleFormChange("careerGoals", e.target.value)}
-                      rows={3}
-                    />
+                    <Textarea id="careerGoals" placeholder="What do you want to achieve in the next 2-3 years?" value={formData.careerGoals} onChange={(e) => handleFormChange("careerGoals", e.target.value)} rows={3} />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="areasOfInterest">Areas of Interest</Label>
-                    <Textarea
-                      id="areasOfInterest"
-                      placeholder="e.g. Leadership, Digital Transformation, Sustainability"
-                      value={formData.areasOfInterest}
-                      onChange={(e) => handleFormChange("areasOfInterest", e.target.value)}
-                      rows={2}
-                    />
+                    <Textarea id="areasOfInterest" placeholder="e.g. Leadership, Digital Transformation, Sustainability" value={formData.areasOfInterest} onChange={(e) => handleFormChange("areasOfInterest", e.target.value)} rows={2} />
                   </div>
                 </TabsContent>
 
@@ -182,58 +202,40 @@ const Index = () => {
                     {cvFile ? (
                       <div className="text-center">
                         <p className="font-medium text-foreground">{cvFile.name}</p>
-                        <p className="text-sm text-muted-foreground">
-                          Click to replace
-                        </p>
+                        <p className="text-sm text-muted-foreground">Click to replace</p>
                       </div>
                     ) : (
                       <div className="text-center">
-                        <p className="font-medium text-foreground">
-                          Drop your CV here or click to upload
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          PDF or Word documents accepted
-                        </p>
+                        <p className="font-medium text-foreground">Drop your CV here or click to upload</p>
+                        <p className="text-sm text-muted-foreground">PDF or Word documents accepted</p>
                       </div>
                     )}
-                    <input
-                      id="cv-upload"
-                      type="file"
-                      accept=".pdf,.doc,.docx"
-                      className="hidden"
-                      onChange={(e) => setCvFile(e.target.files?.[0] || null)}
-                    />
+                    <input id="cv-upload" type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={(e) => setCvFile(e.target.files?.[0] || null)} />
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    Your CV will be parsed by AI to extract your professional profile. No data is stored.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Your CV will be parsed by AI to extract your professional profile. No data is stored.</p>
                 </TabsContent>
 
                 <TabsContent value="linkedin" className="space-y-4 text-left">
                   <div className="space-y-2">
                     <Label htmlFor="linkedin">LinkedIn Profile Text</Label>
-                    <Textarea
-                      id="linkedin"
-                      placeholder="Copy and paste your LinkedIn summary, experience section, or About text here..."
-                      value={linkedinText}
-                      onChange={(e) => setLinkedinText(e.target.value)}
-                      rows={8}
-                    />
+                    <Textarea id="linkedin" placeholder="Copy and paste your LinkedIn summary, experience section, or About text here..." value={linkedinText} onChange={(e) => setLinkedinText(e.target.value)} rows={8} />
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    Paste your LinkedIn profile text — we'll extract your experience and skills from it.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Paste your LinkedIn profile text — we'll extract your experience and skills from it.</p>
                 </TabsContent>
               </Tabs>
 
-              <Button
-                className="mt-6 w-full gap-2"
-                size="lg"
-                disabled={!hasInput}
-                onClick={handleSubmit}
-              >
-                Get Recommendations
-                <ArrowRight className="h-4 w-4" />
+              <Button className="mt-6 w-full gap-2" size="lg" disabled={!hasInput || loading} onClick={handleSubmit}>
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    {loadingMessage || "Processing..."}
+                  </>
+                ) : (
+                  <>
+                    Get Recommendations
+                    <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
               </Button>
             </CardContent>
           </Card>
