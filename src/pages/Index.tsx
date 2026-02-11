@@ -11,7 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useNavigate, Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { programmes } from "@/data/programmes";
+
 
 interface ProfileData {
   jobTitle: string;
@@ -47,55 +47,37 @@ const Index = () => {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      // Build profile object for the recommend edge function
-      const profile: Record<string, string> = {};
+      // Build request body for backend-proxy → Python backend
+      const body: Record<string, string> = {};
 
       if (activeTab === "cv" && cvFile) {
         setLoadingMessage("Uploading & analyzing your CV...");
-        // For CV mode, parse the CV first via parse-cv, then use the extracted text
         const arrayBuffer = await cvFile.arrayBuffer();
         const bytes = new Uint8Array(arrayBuffer);
         let binary = "";
         for (let i = 0; i < bytes.length; i++) {
           binary += String.fromCharCode(bytes[i]);
         }
-        const { data: cvData, error: cvError } = await supabase.functions.invoke("parse-cv", {
-          body: { file_base64: btoa(binary), file_name: cvFile.name },
-        });
-        if (cvError) throw new Error(cvData?.error || "Failed to parse CV");
-        // Use the structured profile extracted from CV
-        const cvProfile = cvData?.profile || {};
-        Object.entries(cvProfile).forEach(([k, v]) => {
-          if (v) profile[k] = String(v);
-        });
+        body.file_base64 = btoa(binary);
+        body.file_name = cvFile.name;
       } else if (activeTab === "linkedin" && linkedinText) {
-        profile.linkedin_profile = linkedinText;
+        setLoadingMessage("Analyzing your LinkedIn profile...");
+        body.linkedin_text = linkedinText;
       } else {
-        if (formData.jobTitle) profile.jobTitle = formData.jobTitle;
-        if (formData.industry) profile.industry = formData.industry;
-        if (formData.yearsExperience) profile.yearsExperience = `${formData.yearsExperience} years`;
-        if (formData.careerGoals) profile.careerGoals = formData.careerGoals;
-        if (formData.areasOfInterest) profile.areasOfInterest = formData.areasOfInterest;
+        setLoadingMessage("Analyzing your profile...");
+        const parts: string[] = [];
+        if (formData.jobTitle) parts.push(`Current role: ${formData.jobTitle}`);
+        if (formData.industry) parts.push(`Industry: ${formData.industry}`);
+        if (formData.yearsExperience) parts.push(`${formData.yearsExperience} years of experience`);
+        if (formData.careerGoals) parts.push(`Goals: ${formData.careerGoals}`);
+        if (formData.areasOfInterest) parts.push(`Interests: ${formData.areasOfInterest}`);
+        body.career_goals = parts.join(". ");
       }
 
       setLoadingMessage("Finding your best programme matches...");
-      // Build fallback catalogue from local data in case DB isn't seeded yet
-      const fallbackCatalogue = programmes.map((p) => {
-        const parts = [`PROGRAMME: ${p.name}`];
-        if (p.category) parts.push(`Category: ${p.category}`);
-        if (p.description) parts.push(`Description: ${p.description}`);
-        if (p.fee) parts.push(`Fee: ${p.fee}`);
-        if (p.duration) parts.push(`Format: ${p.duration}`);
-        if (p.location) parts.push(`Location: ${p.location}`);
-        if (p.startDate) parts.push(`Start date: ${p.startDate}`);
-        if (p.targetAudience) parts.push(`Target audience: ${p.targetAudience}`);
-        if (p.whyThisProgramme) parts.push(`Why this programme: ${p.whyThisProgramme}`);
-        if (p.url) parts.push(`URL: ${p.url}`);
-        return parts.join("\n");
-      }).join("\n\n---\n\n");
 
-      const { data, error } = await supabase.functions.invoke("recommend", {
-        body: { profile, catalogue: fallbackCatalogue },
+      const { data, error } = await supabase.functions.invoke("backend-proxy", {
+        body,
       });
 
       if (error) {
@@ -116,7 +98,7 @@ const Index = () => {
           name: contactName || null,
           email: contactEmail || null,
           wantsInfo,
-          profile,
+          profile: data.profile || body,
           recommendations: data.recommendations,
           outreachEmail: data.outreachEmail,
           inputMethod: activeTab,
