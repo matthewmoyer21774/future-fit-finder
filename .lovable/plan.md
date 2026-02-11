@@ -1,42 +1,71 @@
 
 
-# Store Programmes in Database and Bypass Railway
+# Get the Python Backend Running on Railway
 
-## The Problem
-The Railway backend's vector DB never finishes building, so recommendations always fail. Meanwhile, you already have a working `recommend` edge function that uses Lovable AI -- it just needs the programme data.
+## What's Wrong Today
 
-## The Solution
-Store all 61 programmes in the database, update the `recommend` function to load them from there, and route the frontend directly to it -- completely bypassing Railway.
+The Railway deployment fails because the vector DB build (ChromaDB + OpenAI embeddings) runs at startup and either times out or crashes before completing. Railway's health check fails, and the service restarts in a loop.
 
-## Steps
+Additionally, the architecture page is a pure frontend simulation -- it doesn't actually hit your Railway backend.
 
-### 1. Create a `programmes` table
-A new database table with columns: `id`, `title`, `category`, `description`, `url`, `fee`, `format`, `location`, `start_date`, `target_audience`, `why_this_programme`, `key_topics`, and `full_text` (a searchable blob combining all programme content).
+## Plan
 
-RLS: public read access (programmes are not sensitive data), no public write.
+### 1. Add a Dockerfile for reliable Railway deployment
+Nixpacks sometimes misconfigures Python builds. A Dockerfile gives full control over the environment, ensures `programme_pages/` data is included, and sets the correct working directory.
 
-### 2. Seed the table with all 61 programmes
-Extract the data from `programmes_database.json` and insert it into the new table using a migration.
+### 2. Make the vector DB build more robust
+- Add retry logic with exponential backoff to `build_vectordb.py` (OpenAI embedding calls can transiently fail)
+- Batch the 61 programmes into smaller groups (ChromaDB's `add()` with 61 docs at once can cause memory spikes)
+- Add a `/health` response that distinguishes "starting" vs "ready" so Railway doesn't kill the process prematurely
 
-### 3. Update the `recommend` edge function
-Instead of expecting `catalogue` in the request body, the function will query the `programmes` table directly and build the catalogue string itself. It will continue using Lovable AI (Gemini) for matching -- no Railway needed.
+### 3. Update `main.py` startup to be more resilient
+- Increase Railway health check grace period via `railway.json` (`healthcheckTimeout`)
+- Keep the background thread approach but add proper error logging and retry
 
-### 4. Update the frontend (`Index.tsx`)
-Change the submit handler to call the `recommend` function directly (instead of `backend-proxy`), passing only the user's profile/career goals. No more waiting for Railway to warm up.
+### 4. Make the Architecture page call the REAL Railway backend
+Instead of `setTimeout` simulations, the "Run Demo" button will:
+- Call `backend-proxy` edge function with a sample profile
+- Show real responses at each pipeline stage (using the proxy's response data)
+- Fall back to the simulation if Railway is down
 
-### 5. Update the Programmes page
-Optionally switch `src/pages/Programmes.tsx` to load from the database instead of the local JSON import, keeping a single source of truth.
+### 5. Fix architecture page tech labels to match actual code
+The code uses **OpenAI GPT-4o-mini** for classification (not BART) and **OpenAI text-embedding-3-small** for embeddings (not all-MiniLM-L6-v2). The labels will be updated to reflect reality.
 
-## What This Fixes
-- No more "System is warming up" errors
-- No dependency on Railway being online
-- Instant recommendations using Lovable AI
-- Single source of truth for programme data
+## Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| `backend/Dockerfile` | Create -- multi-stage Python image |
+| `backend/build_vectordb.py` | Edit -- add retry logic and batching |
+| `backend/main.py` | Edit -- improve startup error handling |
+| `backend/railway.json` | Edit -- add health check timeout |
+| `src/pages/AdminArchitecture.tsx` | Edit -- real backend call + fix tech labels |
+
+## What You'll Need To Do on Railway
+
+1. Make sure your Railway service's **Root Directory** is set to `backend/`
+2. Ensure `OPENAI_API_KEY` is set in Railway environment variables (confirmed)
+3. After we push changes, Railway will auto-deploy from GitHub
+4. The first deploy will take 2-3 minutes (building vector DB with 61 programmes)
 
 ## Technical Details
 
-- The `programmes` table will be seeded via SQL migration using the existing JSON data
-- The `recommend` edge function will use `createClient` from `@supabase/supabase-js` to query the table
-- The `full_text` column will concatenate title, description, sections, and foldable content for richer AI context
-- The frontend will send profile fields directly to the `recommend` function, which handles everything server-side
+**Dockerfile approach:**
+```text
+python:3.11-slim base image
+Install dependencies from requirements.txt
+Copy programme_pages/ data and all Python files
+Expose $PORT, run uvicorn
+```
+
+**Retry logic for embeddings:**
+- 3 retries with 2/4/8 second backoff
+- Batch size of 20 documents per ChromaDB add() call
+- Graceful fallback: server starts even if vector DB fails, returns helpful error
+
+**Architecture page live demo:**
+- Calls `/health` first to check if Railway is up
+- If up, sends a sample profile to `backend-proxy`
+- Maps response fields to pipeline stages in real time
+- Shows actual profile extraction, categories, and recommendations from the backend
 
