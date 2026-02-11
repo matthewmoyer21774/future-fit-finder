@@ -1,10 +1,11 @@
 """
 Zero-shot classification of candidate career goals into Vlerick programme categories.
-Uses facebook/bart-large-mnli from HuggingFace transformers.
-This runs locally — no API key needed.
+Uses OpenAI GPT-4o-mini for lightweight, fast classification.
 """
 
-from transformers import pipeline
+import json
+import os
+from openai import OpenAI
 
 # The 12 Vlerick executive education categories
 VLERICK_CATEGORIES = [
@@ -22,20 +23,14 @@ VLERICK_CATEGORIES = [
     "Sustainability",
 ]
 
-# Lazy-loaded classifier (downloads ~1.6GB model on first use, then cached)
-_classifier = None
+CLASSIFY_PROMPT = f"""You are a classifier. Given the candidate text, score each of these categories from 0.0 to 1.0 based on relevance:
 
+{json.dumps(VLERICK_CATEGORIES)}
 
-def get_classifier():
-    """Get or initialize the zero-shot classification pipeline."""
-    global _classifier
-    if _classifier is None:
-        print("Loading zero-shot classification model (first time may take a minute)...")
-        _classifier = pipeline(
-            "zero-shot-classification",
-            model="facebook/bart-large-mnli",
-        )
-    return _classifier
+Return ONLY a JSON array of objects with "category" and "score" keys, sorted by score descending. Example:
+[{{"category": "Strategy", "score": 0.85}}, ...]
+
+Return ALL 12 categories with scores."""
 
 
 def classify_goals(text: str, top_k: int = 3) -> list[dict]:
@@ -48,20 +43,35 @@ def classify_goals(text: str, top_k: int = 3) -> list[dict]:
 
     Returns:
         List of dicts with 'category' and 'score', sorted by score descending.
-        Example: [{"category": "Strategy", "score": 0.85}, ...]
     """
-    classifier = get_classifier()
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-    result = classifier(
-        text,
-        candidate_labels=VLERICK_CATEGORIES,
-        multi_label=True,
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": CLASSIFY_PROMPT},
+            {"role": "user", "content": text},
+        ],
+        temperature=0.3,
+        max_tokens=500,
     )
 
-    # Pair labels with scores and sort
-    categories = []
-    for label, score in zip(result["labels"], result["scores"]):
-        categories.append({"category": label, "score": round(score, 4)})
+    content = response.choices[0].message.content.strip()
 
-    # Already sorted by score from the pipeline, just take top_k
-    return categories[:top_k]
+    # Strip markdown code fences if present
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+
+    try:
+        categories = json.loads(content)
+        # Ensure proper format
+        for cat in categories:
+            cat["score"] = round(float(cat["score"]), 4)
+        # Sort by score descending and return top_k
+        categories.sort(key=lambda x: x["score"], reverse=True)
+        return categories[:top_k]
+    except (json.JSONDecodeError, KeyError):
+        # Fallback: return first top_k categories with equal scores
+        return [{"category": c, "score": round(1.0 / (i + 1), 4)} for i, c in enumerate(VLERICK_CATEGORIES[:top_k])]

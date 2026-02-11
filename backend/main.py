@@ -32,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "programme_pages")
+PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
 
 
 @app.get("/health")
