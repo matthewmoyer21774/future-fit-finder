@@ -1,96 +1,121 @@
+import rawData from "../../programme_pages/programmes_database.json";
+
 export interface Programme {
   id: string;
   name: string;
   category: string;
   description: string;
   targetAudience: string;
+  whyThisProgramme: string;
   duration: string;
+  fee: string;
+  location: string;
+  startDate: string;
   url: string;
   keyTopics: string[];
 }
 
-// Placeholder data — replace with your actual JSON import
-export const programmes: Programme[] = [
-  {
-    id: "1",
-    name: "The Vlerick MBA",
-    category: "MBA",
-    description: "A transformative full-time MBA programme designed for ambitious professionals seeking to accelerate their career.",
-    targetAudience: "Mid-career professionals with 3-10 years of experience",
-    duration: "1 year full-time",
-    url: "https://www.vlerick.com/en/programmes/mba",
-    keyTopics: ["Leadership", "Strategy", "Innovation", "Entrepreneurship"],
-  },
-  {
-    id: "2",
-    name: "Executive MBA",
-    category: "MBA",
-    description: "A part-time MBA for senior leaders who want to sharpen their strategic thinking while continuing to work.",
-    targetAudience: "Senior managers and executives with 8+ years of experience",
-    duration: "2 years part-time",
-    url: "https://www.vlerick.com/en/programmes/executive-mba",
-    keyTopics: ["Strategic Leadership", "Digital Transformation", "Global Business"],
-  },
-  {
-    id: "3",
-    name: "Advanced Management Programme",
-    category: "Executive Education",
-    description: "For experienced leaders ready to take the next step in their executive career.",
-    targetAudience: "C-suite executives and senior directors",
-    duration: "6 months (modular)",
-    url: "https://www.vlerick.com/en/programmes/executive-education",
-    keyTopics: ["Corporate Strategy", "Board Governance", "Leadership"],
-  },
-  {
-    id: "4",
-    name: "Digital Marketing & AI",
-    category: "Open Programmes",
-    description: "Leverage AI and data analytics to transform your marketing strategy and customer engagement.",
-    targetAudience: "Marketing managers and digital professionals",
-    duration: "4 days",
-    url: "https://www.vlerick.com/en/programmes/open-programmes",
-    keyTopics: ["AI in Marketing", "Data Analytics", "Customer Journey", "Digital Strategy"],
-  },
-  {
-    id: "5",
-    name: "Finance for Non-Financial Managers",
-    category: "Open Programmes",
-    description: "Build financial acumen to make better business decisions and communicate effectively with finance teams.",
-    targetAudience: "Non-finance managers and team leaders",
-    duration: "3 days",
-    url: "https://www.vlerick.com/en/programmes/open-programmes",
-    keyTopics: ["Financial Statements", "Budgeting", "ROI Analysis", "Cost Management"],
-  },
-  {
-    id: "6",
-    name: "Leading High-Performance Teams",
-    category: "Leadership",
-    description: "Develop the skills to build, motivate, and sustain high-performing teams in complex environments.",
-    targetAudience: "Team leaders and middle managers",
-    duration: "3 days",
-    url: "https://www.vlerick.com/en/programmes/open-programmes",
-    keyTopics: ["Team Dynamics", "Motivation", "Conflict Resolution", "Coaching"],
-  },
-  {
-    id: "7",
-    name: "Negotiation Skills Masterclass",
-    category: "Open Programmes",
-    description: "Master the art and science of negotiation for complex business deals and stakeholder management.",
-    targetAudience: "Managers involved in negotiations and deal-making",
-    duration: "2 days",
-    url: "https://www.vlerick.com/en/programmes/open-programmes",
-    keyTopics: ["Negotiation Strategy", "Influence", "Stakeholder Management"],
-  },
-  {
-    id: "8",
-    name: "Sustainability & Business Strategy",
-    category: "Executive Education",
-    description: "Integrate sustainability into core business strategy and create long-term value.",
-    targetAudience: "Senior leaders and sustainability managers",
-    duration: "5 days",
-    url: "https://www.vlerick.com/en/programmes/executive-education",
-    keyTopics: ["ESG", "Circular Economy", "Sustainable Innovation", "Reporting"],
-  },
-];
+interface RawProgramme {
+  url: string;
+  title: string;
+  subtitle: string;
+  key_facts: {
+    fee?: string;
+    format?: string;
+    location?: string;
+    start_date?: string;
+  };
+  description: string;
+  foldable_sections: string[];
+}
 
-export const categories = [...new Set(programmes.map((p) => p.category))];
+function extractCategory(url: string): string {
+  const match = url.match(/programmes-in-([\w-]+)\//);
+  if (!match) return "Other";
+  const slug = match[1];
+  const map: Record<string, string> = {
+    "accounting-finance": "Accounting & Finance",
+    "digital-transformation-and-ai": "Digital Transformation & AI",
+    "entrepreneurship": "Entrepreneurship",
+    "general-management": "General Management",
+    "healthcare-management": "Healthcare Management",
+    "human-resource-management": "Human Resource Management",
+    "innovation-management": "Innovation Management",
+    "marketing-sales": "Marketing & Sales",
+    "operations-supply-chain-management": "Operations & Supply Chain",
+    "people-management-leadership": "People Management & Leadership",
+    "strategy": "Strategy",
+    "sustainability": "Sustainability",
+  };
+  return map[slug] || slug.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function extractFoldableSection(sections: string[], heading: string): string {
+  for (const s of sections) {
+    if (s.startsWith(heading + "\n")) {
+      return s
+        .replace(heading + "\n", "")
+        .trim();
+    }
+  }
+  return "";
+}
+
+function extractKeyTopics(description: string): string[] {
+  // Extract meaningful keywords from the description
+  const words = description.split(/\s+/);
+  const topics: string[] = [];
+  const buzzwords = [
+    "AI", "digital", "strategy", "leadership", "finance", "innovation",
+    "transformation", "sustainability", "marketing", "negotiation",
+    "management", "entrepreneurship", "data", "analytics", "sales",
+    "operations", "supply chain", "HR", "technology", "cybersecurity",
+    "change", "coaching", "team", "performance", "growth",
+  ];
+  for (const bw of buzzwords) {
+    if (description.toLowerCase().includes(bw.toLowerCase()) && topics.length < 4) {
+      topics.push(bw.charAt(0).toUpperCase() + bw.slice(1));
+    }
+  }
+  return topics.length > 0 ? topics : ["Executive Education"];
+}
+
+function titleCase(str: string): string {
+  return str
+    .toLowerCase()
+    .split(" ")
+    .map((w) => {
+      if (["and", "in", "of", "the", "for", "to", "a"].includes(w)) return w;
+      return w.charAt(0).toUpperCase() + w.slice(1);
+    })
+    .join(" ")
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+// Deduplicate by URL
+const seen = new Set<string>();
+const uniqueData = (rawData as RawProgramme[]).filter((p) => {
+  if (seen.has(p.url)) return false;
+  seen.add(p.url);
+  return true;
+});
+
+export const programmes: Programme[] = uniqueData.map((p, i) => ({
+  id: String(i + 1),
+  name: titleCase(p.title),
+  category: extractCategory(p.url),
+  description: p.description?.split("\n")[0] || "",
+  targetAudience: extractFoldableSection(p.foldable_sections || [], "WHO SHOULD ATTEND")
+    .split("\n")
+    .slice(0, 2)
+    .join(". ") || "Professionals and managers",
+  whyThisProgramme: extractFoldableSection(p.foldable_sections || [], "WHY THIS PROGRAMME"),
+  duration: p.key_facts?.format || "Contact for details",
+  fee: p.key_facts?.fee || "Contact for pricing",
+  location: p.key_facts?.location || "",
+  startDate: p.key_facts?.start_date || "",
+  url: p.url,
+  keyTopics: extractKeyTopics(p.description || ""),
+}));
+
+export const categories = [...new Set(programmes.map((p) => p.category))].sort();

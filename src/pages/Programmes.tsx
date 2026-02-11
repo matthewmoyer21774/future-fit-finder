@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { GraduationCap, ExternalLink, Clock, Users, Search } from "lucide-react";
+import { GraduationCap, ExternalLink, Clock, Users, Search, MapPin, Calendar, CreditCard } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,11 +13,13 @@ const Programmes = () => {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const filtered = programmes.filter((p) => {
+    const q = search.toLowerCase();
     const matchesSearch =
       !search ||
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.description.toLowerCase().includes(search.toLowerCase()) ||
-      p.keyTopics.some((t) => t.toLowerCase().includes(search.toLowerCase()));
+      p.name.toLowerCase().includes(q) ||
+      p.description.toLowerCase().includes(q) ||
+      p.category.toLowerCase().includes(q) ||
+      p.keyTopics.some((t) => t.toLowerCase().includes(q));
     const matchesCategory = !selectedCategory || p.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
@@ -59,8 +61,8 @@ const Programmes = () => {
         </motion.div>
 
         {/* Filters */}
-        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center">
-          <div className="relative flex-1 max-w-md">
+        <div className="mb-8 flex flex-col gap-4">
+          <div className="relative max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search programmes..."
@@ -97,7 +99,7 @@ const Programmes = () => {
               key={programme.id}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: i * 0.05 }}
+              transition={{ duration: 0.4, delay: Math.min(i * 0.03, 0.5) }}
             >
               <Card className="flex h-full flex-col transition-shadow hover:shadow-md">
                 <CardHeader className="pb-3">
@@ -111,18 +113,34 @@ const Programmes = () => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="flex flex-1 flex-col">
-                  <p className="mb-4 flex-1 text-sm text-muted-foreground">
+                  <p className="mb-4 flex-1 text-sm text-muted-foreground line-clamp-3">
                     {programme.description}
                   </p>
-                  <div className="mb-4 space-y-2 text-sm">
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Users className="h-4 w-4 shrink-0" />
-                      <span>{programme.targetAudience}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Clock className="h-4 w-4 shrink-0" />
-                      <span>{programme.duration}</span>
-                    </div>
+                  <div className="mb-4 space-y-1.5 text-sm">
+                    {programme.duration && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Clock className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{programme.duration}</span>
+                      </div>
+                    )}
+                    {programme.location && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <MapPin className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{programme.location}</span>
+                      </div>
+                    )}
+                    {programme.fee && programme.fee !== "Contact for pricing" && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <CreditCard className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{programme.fee}</span>
+                      </div>
+                    )}
+                    {programme.startDate && (
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Calendar className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{programme.startDate}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="mb-4 flex flex-wrap gap-1.5">
                     {programme.keyTopics.map((topic) => (
