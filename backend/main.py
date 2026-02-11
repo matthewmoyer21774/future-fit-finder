@@ -2,14 +2,13 @@
 FastAPI backend for the Vlerick Programme Recommendation Tool.
 Endpoints:
   POST /recommend  - Upload CV + career goals → get recommendations + email
-  GET  /programmes - List all 61 programmes with metadata
+  GET  /programmes - List all programmes with metadata
   GET  /health     - Health check
 """
 
 import json
 import os
 import glob
-import threading
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,9 +16,6 @@ from parsers import parse_file, parse_linkedin_url
 from profiler import extract_profile
 from classifier import classify_goals
 from recommender import recommend
-from build_vectordb import main as build_db
-
-is_ready = False
 
 app = FastAPI(
     title="Vlerick Programme Recommender",
@@ -39,42 +35,14 @@ app.add_middleware(
 PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
 
 
-startup_error = ""
-
-@app.on_event("startup")
-def startup():
-    def build():
-        global is_ready, startup_error
-        MAX_RETRIES = 3
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                print(f"Vector DB build attempt {attempt}/{MAX_RETRIES}...")
-                build_db()
-                is_ready = True
-                print("Vector DB ready!")
-                return
-            except Exception as e:
-                startup_error = str(e)
-                print(f"Vector DB build attempt {attempt} failed: {e}")
-                if attempt < MAX_RETRIES:
-                    import time
-                    time.sleep(2 ** attempt)
-        print("All vector DB build attempts failed. Server running without vector DB.")
-    threading.Thread(target=build, daemon=True).start()
-
-
 @app.get("/health")
 def health():
-    return {
-        "status": "ok" if is_ready else "starting",
-        "ready": is_ready,
-        "error": startup_error if startup_error and not is_ready else None,
-    }
+    return {"status": "ok", "ready": True}
 
 
 @app.get("/programmes")
 def list_programmes():
-    """Return metadata for all 61 programmes."""
+    """Return metadata for all programmes."""
     programmes = []
     json_files = glob.glob(
         os.path.join(PROGRAMME_PAGES_DIR, "**", "*.json"), recursive=True
@@ -112,14 +80,6 @@ async def get_recommendations(
     Upload a CV (PDF/DOCX/TXT) and/or provide career goals text.
     Returns top 3 programme recommendations and a personalised email draft.
     """
-    # Guard: vector DB still building
-    if not is_ready:
-        return {
-            "error": "System is starting up, please try again in a moment.",
-            "recommendations": [],
-            "email_draft": "",
-        }
-
     # Step 1: Parse input sources
     cv_text = ""
 
@@ -155,7 +115,7 @@ async def get_recommendations(
 
     categories = classify_goals(classify_input, top_k=3)
 
-    # Step 4: RAG search + LLM synthesis
+    # Step 4: LLM synthesis with all programmes
     result = recommend(profile, categories)
 
     return {
