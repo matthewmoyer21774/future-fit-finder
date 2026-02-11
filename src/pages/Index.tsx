@@ -11,7 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useNavigate, Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-
+import { programmes } from "@/data/programmes";
 
 interface ProfileData {
   jobTitle: string;
@@ -79,8 +79,23 @@ const Index = () => {
       }
 
       setLoadingMessage("Finding your best programme matches...");
+      // Build fallback catalogue from local data in case DB isn't seeded yet
+      const fallbackCatalogue = programmes.map((p) => {
+        const parts = [`PROGRAMME: ${p.name}`];
+        if (p.category) parts.push(`Category: ${p.category}`);
+        if (p.description) parts.push(`Description: ${p.description}`);
+        if (p.fee) parts.push(`Fee: ${p.fee}`);
+        if (p.duration) parts.push(`Format: ${p.duration}`);
+        if (p.location) parts.push(`Location: ${p.location}`);
+        if (p.startDate) parts.push(`Start date: ${p.startDate}`);
+        if (p.targetAudience) parts.push(`Target audience: ${p.targetAudience}`);
+        if (p.whyThisProgramme) parts.push(`Why this programme: ${p.whyThisProgramme}`);
+        if (p.url) parts.push(`URL: ${p.url}`);
+        return parts.join("\n");
+      }).join("\n\n---\n\n");
+
       const { data, error } = await supabase.functions.invoke("recommend", {
-        body: { profile },
+        body: { profile, catalogue: fallbackCatalogue },
       });
 
       if (error) {

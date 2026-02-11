@@ -13,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    const { profile } = await req.json();
+    const { profile, catalogue: fallbackCatalogue } = await req.json();
 
     if (!profile) {
       return new Response(JSON.stringify({ error: "No profile provided" }), {
@@ -22,7 +22,9 @@ serve(async (req) => {
       });
     }
 
-    // Load catalogue from database
+    let catalogue = "";
+
+    // Try loading from database first
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -31,29 +33,27 @@ serve(async (req) => {
       .from("programmes")
       .select("title, category, description, url, fee, format, location, start_date, target_audience, why_this_programme, key_topics, full_text");
 
-    if (dbError) {
-      console.error("DB error:", dbError);
-      throw new Error("Failed to load programme catalogue");
+    if (!dbError && programmes && programmes.length > 0) {
+      catalogue = programmes.map((p) => {
+        const parts = [`PROGRAMME: ${p.title}`];
+        if (p.category) parts.push(`Category: ${p.category}`);
+        if (p.description) parts.push(`Description: ${p.description}`);
+        if (p.fee) parts.push(`Fee: ${p.fee}`);
+        if (p.format) parts.push(`Format: ${p.format}`);
+        if (p.location) parts.push(`Location: ${p.location}`);
+        if (p.start_date) parts.push(`Start date: ${p.start_date}`);
+        if (p.target_audience) parts.push(`Target audience: ${p.target_audience}`);
+        if (p.why_this_programme) parts.push(`Why this programme: ${p.why_this_programme}`);
+        if (p.url) parts.push(`URL: ${p.url}`);
+        return parts.join("\n");
+      }).join("\n\n---\n\n");
+      console.log(`Loaded ${programmes.length} programmes from database`);
+    } else if (fallbackCatalogue) {
+      catalogue = fallbackCatalogue;
+      console.log("Using fallback catalogue from request");
+    } else {
+      throw new Error("No programme data available. Please seed the database or provide catalogue.");
     }
-
-    if (!programmes || programmes.length === 0) {
-      throw new Error("Programme catalogue is empty. Please seed the database first.");
-    }
-
-    // Build catalogue string for the AI
-    const catalogue = programmes.map((p) => {
-      const parts = [`PROGRAMME: ${p.title}`];
-      if (p.category) parts.push(`Category: ${p.category}`);
-      if (p.description) parts.push(`Description: ${p.description}`);
-      if (p.fee) parts.push(`Fee: ${p.fee}`);
-      if (p.format) parts.push(`Format: ${p.format}`);
-      if (p.location) parts.push(`Location: ${p.location}`);
-      if (p.start_date) parts.push(`Start date: ${p.start_date}`);
-      if (p.target_audience) parts.push(`Target audience: ${p.target_audience}`);
-      if (p.why_this_programme) parts.push(`Why this programme: ${p.why_this_programme}`);
-      if (p.url) parts.push(`URL: ${p.url}`);
-      return parts.join("\n");
-    }).join("\n\n---\n\n");
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
