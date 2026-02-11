@@ -131,13 +131,37 @@ ${catalogue}`;
     }
 
     const data = await response.json();
-    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    console.log("AI response structure:", JSON.stringify(data.choices?.[0]?.message, null, 2));
+    
+    const message = data.choices?.[0]?.message;
+    let result;
 
-    if (!toolCall) {
+    // Try tool_calls first
+    const toolCall = message?.tool_calls?.[0];
+    if (toolCall) {
+      result = JSON.parse(toolCall.function.arguments);
+    } else if (message?.content) {
+      // Fallback: parse from content (some models return JSON in content)
+      let content = message.content.trim();
+      if (content.startsWith("```")) {
+        content = content.split("```")[1];
+        if (content.startsWith("json")) content = content.slice(4);
+      }
+      try {
+        result = JSON.parse(content);
+      } catch {
+        console.error("Failed to parse content as JSON:", content.substring(0, 500));
+        throw new Error("No recommendations returned from AI");
+      }
+    } else {
       throw new Error("No recommendations returned from AI");
     }
 
-    const result = JSON.parse(toolCall.function.arguments);
+    // Validate structure
+    if (!result.recommendations || !Array.isArray(result.recommendations)) {
+      console.error("Invalid result structure:", JSON.stringify(result).substring(0, 500));
+      throw new Error("No recommendations returned from AI");
+    }
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
