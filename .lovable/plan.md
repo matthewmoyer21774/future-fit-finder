@@ -1,42 +1,29 @@
 
 
-# Vlerick Programme Recommendation Tool
+# Import Real Programme Data and Update the App
 
-## Overview
-An AI-powered web app that recommends Vlerick Business School executive education programmes based on a user's professional profile and career goals. Users upload a CV, paste LinkedIn info, or fill a form — and get a personalized shortlist of recommended programmes with match explanations.
+## What we found
+The file `programme_pages/programmes_database.json` is already in the project with all 50+ programmes and rich metadata including titles, descriptions, fees, formats, locations, target audiences, curriculum details, and more.
 
-**Programme data is pre-scraped and will be imported from your existing GitHub repo as JSON.**
+## Plan
 
----
+### 1. Update the Programme data model and import
+- Rewrite `src/data/programmes.ts` to import and transform the real data from `programme_pages/programmes_database.json`
+- Update the `Programme` interface to match the actual JSON structure (title, description, key_facts, foldable_sections for target audience/curriculum, url, etc.)
+- Extract key fields like "who should attend" and "why this programme" from the foldable_sections
+- Parse categories from the URL path (e.g., "accounting-finance", "marketing-sales")
 
-## Step 1: Import & Display Programme Data
-- Import your JSON programme data directly into the app (bundled as a static data file)
-- Create a browsable programme catalogue page so users can also explore programmes manually
-- Each programme card shows: name, category, target audience, duration, and a link to the Vlerick page
+### 2. Update the Programme Catalogue page
+- Update `src/pages/Programmes.tsx` to display real programme data with proper fields: name, category, fee, duration, location, and description
+- Update category filters to use real categories from the data
+- Ensure search works across real programme titles and descriptions
 
-## Step 2: User Profile Input Page
-A landing page with three input options:
-1. **Upload CV/Resume** — Drag-and-drop PDF or Word file upload. AI parses it to extract: current role, industry, experience level, skills, education, career interests
-2. **Paste LinkedIn Text** — User copies and pastes their LinkedIn profile summary/experience section into a text box
-3. **Manual Form** — Quick form with fields: current job title, industry, years of experience, career goals, areas of interest
+### 3. Update the Landing/Input page
+- Minor updates to `src/pages/Index.tsx` to ensure the profile input form aligns with the data fields available for matching (categories, experience levels, etc.)
 
-Users can combine methods (e.g., upload CV + add career goals manually).
-
-## Step 3: AI Recommendation Engine
-- Enable **Lovable Cloud** and use **Lovable AI (Gemini)** via an edge function
-- The edge function receives the user's profile data + the full programme catalogue
-- AI acts as a Vlerick career advisor: analyzes the user's background and goals, then recommends the 3-5 best-fit programmes
-- Each recommendation includes: programme name, why it's a match, confidence level, and the programme URL
-- Uses structured output (tool calling) to return clean, parseable recommendations
-
-## Step 4: Results Page
-- Display recommendations as polished cards with match reasoning
-- Each card: programme name, category, match score/reasoning, duration, "Learn More" link
-- Option to adjust career goals and re-run recommendations
-- Clean, professional design suitable for your assignment demo
-
-## Design & Style
-- Professional, clean design with Vlerick-inspired blue/dark tones
-- Mobile-responsive layout
-- Smooth transitions between input → loading → results
+### Technical details
+- The JSON file has ~8,900 lines with approximately 50-60 programmes
+- Each programme has structured data in `foldable_sections` that contains "WHO SHOULD ATTEND", "WHY THIS PROGRAMME", "DETAILED PROGRAMME", and "FEES AND FINANCING" content
+- Categories will be derived from URLs (e.g., `/programmes-in-accounting-finance/` becomes "Accounting & Finance")
+- The `key_facts` object provides fee, format (duration), location, and start_date
 
