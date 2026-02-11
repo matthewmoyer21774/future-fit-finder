@@ -9,6 +9,7 @@ Endpoints:
 import json
 import os
 import glob
+import threading
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -16,6 +17,9 @@ from parsers import parse_file, parse_linkedin_url
 from profiler import extract_profile
 from classifier import classify_goals
 from recommender import recommend
+from build_vectordb import main as build_db
+
+is_ready = False
 
 app = FastAPI(
     title="Vlerick Programme Recommender",
@@ -35,9 +39,22 @@ app.add_middleware(
 PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
 
 
+@app.on_event("startup")
+def startup():
+    def build():
+        global is_ready
+        try:
+            build_db()
+            is_ready = True
+            print("Vector DB ready!")
+        except Exception as e:
+            print(f"Vector DB build failed: {e}")
+    threading.Thread(target=build, daemon=True).start()
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "ready": is_ready}
 
 
 @app.get("/programmes")
@@ -78,6 +95,14 @@ async def get_recommendations(
     Upload a CV (PDF/DOCX/TXT) and/or provide career goals text.
     Returns top 3 programme recommendations and a personalised email draft.
     """
+    # Guard: vector DB still building
+    if not is_ready:
+        return {
+            "error": "System is starting up, please try again in a moment.",
+            "recommendations": [],
+            "email_draft": "",
+        }
+
     # Step 1: Parse input sources
     cv_text = ""
 
