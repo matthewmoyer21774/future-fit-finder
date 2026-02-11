@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+chroma_db/
+.git/
+*.md
+programme_pages/**/*.txt
