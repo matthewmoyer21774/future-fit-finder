@@ -1,71 +1,53 @@
 
 
-# Get the Python Backend Running on Railway
+# Route the Frontend Through the Python Backend
 
-## What's Wrong Today
+## The Problem
 
-The Railway deployment fails because the vector DB build (ChromaDB + OpenAI embeddings) runs at startup and either times out or crashes before completing. Railway's health check fails, and the service restarts in a loop.
+The main recommendation flow in `Index.tsx` calls two edge functions that use Lovable AI (Gemini):
+- `parse-cv` -- parses CVs using Gemini
+- `recommend` -- generates recommendations using Gemini
 
-Additionally, the architecture page is a pure frontend simulation -- it doesn't actually hit your Railway backend.
+Your Python backend on Railway does ALL of this (parse + profile + classify + vector search + recommend) in a single `/recommend` endpoint. The `backend-proxy` edge function already exists to forward requests there, but nothing in the main flow uses it.
 
-## Plan
+## The Fix
 
-### 1. Add a Dockerfile for reliable Railway deployment
-Nixpacks sometimes misconfigures Python builds. A Dockerfile gives full control over the environment, ensures `programme_pages/` data is included, and sets the correct working directory.
+**One file change**: Update `Index.tsx` to call `backend-proxy` instead of `parse-cv` + `recommend`.
 
-### 2. Make the vector DB build more robust
-- Add retry logic with exponential backoff to `build_vectordb.py` (OpenAI embedding calls can transiently fail)
-- Batch the 61 programmes into smaller groups (ChromaDB's `add()` with 61 docs at once can cause memory spikes)
-- Add a `/health` response that distinguishes "starting" vs "ready" so Railway doesn't kill the process prematurely
+The Python backend's `/recommend` endpoint accepts:
+- `file` (multipart upload)
+- `career_goals` (form field)
+- `linkedin_url` (form field)
 
-### 3. Update `main.py` startup to be more resilient
-- Increase Railway health check grace period via `railway.json` (`healthcheckTimeout`)
-- Keep the background thread approach but add proper error logging and retry
+The `backend-proxy` edge function already converts these from JSON/base64 to multipart and maps the response to the frontend format (`programmeTitle`, `category`, `reasoning`, etc.).
 
-### 4. Make the Architecture page call the REAL Railway backend
-Instead of `setTimeout` simulations, the "Run Demo" button will:
-- Call `backend-proxy` edge function with a sample profile
-- Show real responses at each pipeline stage (using the proxy's response data)
-- Fall back to the simulation if Railway is down
+### What changes in `Index.tsx`:
 
-### 5. Fix architecture page tech labels to match actual code
-The code uses **OpenAI GPT-4o-mini** for classification (not BART) and **OpenAI text-embedding-3-small** for embeddings (not all-MiniLM-L6-v2). The labels will be updated to reflect reality.
+1. **Remove** the two-step flow (parse-cv then recommend)
+2. **Replace** with a single call to `backend-proxy`, sending:
+   - `file_base64` + `file_name` for CV uploads
+   - `career_goals` built from form data or career goals text
+   - `linkedin_text` for LinkedIn input
+3. **Map** the response (already handled by `backend-proxy`)
 
-## Files to Create/Modify
+### For form input specifically:
+The Python backend expects `career_goals` as a text string. For form submissions, we'll concatenate the form fields into a descriptive string (e.g., "Marketing Manager in Technology with 5 years experience. Goals: transition to leadership. Interests: digital transformation").
 
-| File | Action |
+## Files to Modify
+
+| File | Change |
 |------|--------|
-| `backend/Dockerfile` | Create -- multi-stage Python image |
-| `backend/build_vectordb.py` | Edit -- add retry logic and batching |
-| `backend/main.py` | Edit -- improve startup error handling |
-| `backend/railway.json` | Edit -- add health check timeout |
-| `src/pages/AdminArchitecture.tsx` | Edit -- real backend call + fix tech labels |
+| `src/pages/Index.tsx` | Rewire `handleSubmit` to call `backend-proxy` instead of `parse-cv` + `recommend` |
 
-## What You'll Need To Do on Railway
+## What stays the same
 
-1. Make sure your Railway service's **Root Directory** is set to `backend/`
-2. Ensure `OPENAI_API_KEY` is set in Railway environment variables (confirmed)
-3. After we push changes, Railway will auto-deploy from GitHub
-4. The first deploy will take 2-3 minutes (building vector DB with 61 programmes)
+- `backend-proxy` edge function -- already correct, no changes needed
+- Python backend code -- already deployed/deploying on Railway
+- Results page -- already expects the same data shape
+- `save-submission` call -- stays as-is for database logging
 
-## Technical Details
+## Assumptions
 
-**Dockerfile approach:**
-```text
-python:3.11-slim base image
-Install dependencies from requirements.txt
-Copy programme_pages/ data and all Python files
-Expose $PORT, run uvicorn
-```
-
-**Retry logic for embeddings:**
-- 3 retries with 2/4/8 second backoff
-- Batch size of 20 documents per ChromaDB add() call
-- Graceful fallback: server starts even if vector DB fails, returns helpful error
-
-**Architecture page live demo:**
-- Calls `/health` first to check if Railway is up
-- If up, sends a sample profile to `backend-proxy`
-- Maps response fields to pipeline stages in real time
-- Shows actual profile extraction, categories, and recommendations from the backend
+- Railway is deployed and the Python backend is running (you confirmed `OPENAI_API_KEY` is set)
+- If Railway is down, the call will fail with an error toast -- no silent fallback to edge functions (since you want the Python pipeline specifically)
 
