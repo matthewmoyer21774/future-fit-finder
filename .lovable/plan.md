@@ -1,97 +1,76 @@
 
 
-# Switch to Python RAG Backend (Railway) + Live Architecture View
+# Fix Railway Deployment by Replacing Heavy ML Libraries with OpenAI API
 
-## Overview
-Replace the current backend recommendation logic with the Python FastAPI backend deployed on Railway, and add a live pipeline visualization page in the admin dashboard that shows each processing step in real-time.
+## Problem
+The Railway build keeps failing ("context canceled") because the Python dependencies include **torch** (~2GB), **transformers** (~500MB), and **sentence-transformers** -- making the Docker image too large to export within Railway's limits.
 
-## Part 1: Railway Python Backend Integration
+## Solution
+Replace the local ML models with OpenAI API calls you already have access to. This keeps the exact same functionality but shrinks the build from ~5GB to ~200MB.
+
+### What stays the same
+- FastAPI server structure
+- CV parsing (pypdf, python-docx)
+- Profile extraction (already uses OpenAI)
+- ChromaDB vector search logic
+- Recommendation synthesis (already uses OpenAI)
+- The proxy edge function and frontend -- no changes needed
 
 ### What changes
-The Lovable frontend will call your Python FastAPI server (deployed on Railway) instead of the current backend recommendation function. This means the full Python pipeline runs: CV parsing -> profile extraction -> zero-shot classification (BART) -> ChromaDB vector search -> GPT-4o-mini synthesis.
 
-### Steps
+**1. `backend/requirements.txt`** -- Remove heavy libraries
+- Remove: `torch`, `transformers`, `sentence-transformers`
+- The remaining deps (fastapi, chromadb, openai, pypdf, etc.) are lightweight
 
-**1. Prepare Python backend for Railway**
-- Add a `Dockerfile` or `Procfile` and `railway.json` to `backend/`
-- Add a `Nixpacks`-compatible setup (Railway auto-detects Python)
-- The backend needs `OPENAI_API_KEY` set as a Railway env var
-- ChromaDB data must be built at deploy time (add `build_vectordb.py` to the build step or pre-build it)
-- The `programme_pages/` folder must be accessible to the backend
+**2. `backend/classifier.py`** -- Replace BART with OpenAI
+- Instead of running facebook/bart-large-mnli locally, call GPT-4o-mini to classify career goals into the 12 Vlerick categories
+- Same input/output format: takes text, returns top 3 categories with scores
 
-**2. Create a proxy edge function (`backend-proxy`)**
-- A new backend function that forwards requests to the Railway FastAPI URL
-- This avoids CORS issues and keeps the Railway URL private
-- Stores `RAILWAY_BACKEND_URL` as a secret
-- Forwards the CV file (as base64) + career goals + linkedin text to Railway's `/recommend` endpoint
+**3. `backend/build_vectordb.py`** -- Replace sentence-transformers with OpenAI embeddings
+- Use ChromaDB's OpenAI embedding function instead of SentenceTransformerEmbeddingFunction
+- Model: `text-embedding-3-small` (fast, cheap, high quality)
+- Requires OPENAI_API_KEY at build time (already configured as Railway env var)
 
-**3. Update `Index.tsx`**
-- Change the submission flow to call the proxy function
-- Pass raw inputs (CV file, form data, linkedin text) rather than pre-parsed profile
-- The Python backend handles all parsing and processing
-- The proxy returns: `profile`, `top_categories`, `recommendations`, `email_draft`
+**4. `backend/recommender.py`** -- Match embedding function
+- Update `get_collection()` to use the same OpenAI embedding function so queries match the stored embeddings
 
-**4. Update `Results.tsx`**
-- Adapt to the slightly different response shape from the Python backend (e.g. `title` vs `programmeTitle`, `reason` vs `reasoning`)
+**5. `backend/build_vectordb.py`** -- Fix programme_pages path
+- Since Railway's root directory is `backend/`, the `../programme_pages` path won't exist
+- Copy the `programme_pages/` folder into `backend/programme_pages/` so it ships with the deploy
+- Update the path reference accordingly
 
-**5. Update `save-submission`**
-- Adapt field mapping for the Python backend response format
-
-## Part 2: Live Pipeline Visualization (Admin)
-
-### What it shows
-A new tab/page in the admin dashboard with an animated pipeline diagram. When a recommendation request runs, each stage lights up in sequence:
-
-```text
-[Upload CV] --> [Parse Text] --> [Extract Profile] --> [Zero-Shot Classify] --> [Vector Search (ChromaDB)] --> [LLM Synthesis (GPT-4o-mini)] --> [Results]
-```
-
-### Implementation
-
-**1. Create `src/pages/AdminArchitecture.tsx`**
-- Visual pipeline with animated nodes using Framer Motion
-- Each node shows: stage name, technology used, brief description
-- A "Run Demo" button that simulates the pipeline with timed animations
-- Shows sample data flowing between stages (e.g. "Extracted 3 categories: Strategy (85%), Leadership (72%)...")
-
-**2. Add architecture route**
-- Add `/admin/architecture` route in `App.tsx`
-- Add a tab or nav link in the Admin page header
-
-### Pipeline nodes displayed:
-1. **Input** -- CV/Form/LinkedIn text
-2. **Text Extraction** -- PyPDF / python-docx
-3. **Profile Extraction** -- GPT-4o-mini structured extraction
-4. **Zero-Shot Classification** -- facebook/bart-large-mnli -> top 3 categories
-5. **Vector Search** -- ChromaDB + all-MiniLM-L6-v2 embeddings -> top 8 matches
-6. **LLM Synthesis** -- GPT-4o-mini RAG -> top 3 recommendations + email draft
-7. **Output** -- Recommendations + outreach email
-
-Each node animates from grey to green with a progress indicator when the demo runs.
+**6. `backend/Procfile`** -- No changes needed
+- Already runs `python build_vectordb.py && uvicorn main:app ...`
 
 ## Technical Details
 
-### New secret needed
-- `RAILWAY_BACKEND_URL` -- the public URL of your Railway deployment (e.g. `https://your-app.up.railway.app`)
+### New `requirements.txt`
+```
+fastapi
+uvicorn[standard]
+python-multipart
+pypdf
+python-docx
+trafilatura
+chromadb
+openai
+```
 
-### Files to create
-- `supabase/functions/backend-proxy/index.ts` -- proxy to Railway
-- `src/pages/AdminArchitecture.tsx` -- live pipeline page
-- `backend/Procfile` -- `web: uvicorn main:app --host 0.0.0.0 --port $PORT`
-- `backend/railway.json` -- build config
+### Classifier change (classifier.py)
+Replace the BART pipeline with an OpenAI call that returns JSON with category scores. Same interface: `classify_goals(text, top_k=3) -> list[dict]`
 
-### Files to modify
-- `src/pages/Index.tsx` -- call proxy instead of current functions
-- `src/pages/Results.tsx` -- adapt response shape
-- `src/pages/Admin.tsx` -- add link to architecture page
-- `src/App.tsx` -- add `/admin/architecture` route
-- `supabase/config.toml` -- add `backend-proxy` function config
-- `supabase/functions/save-submission/index.ts` -- adapt field names
+### Embedding change (build_vectordb.py + recommender.py)
+```python
+from chromadb.utils import embedding_functions
+ef = embedding_functions.OpenAIEmbeddingFunction(
+    api_key=os.environ.get("OPENAI_API_KEY"),
+    model_name="text-embedding-3-small"
+)
+```
 
-### Railway deployment steps (you do this outside Lovable)
-1. Push the `backend/` folder to a GitHub repo
-2. Connect it to Railway
-3. Set env vars: `OPENAI_API_KEY`, `PORT`
-4. Railway will auto-detect Python, install requirements, and run uvicorn
-5. Run `python build_vectordb.py` as part of the build or include pre-built `chroma_db/`
+### Programme data
+Copy `programme_pages/` into `backend/programme_pages/` and update the path in `build_vectordb.py` and `main.py` to look in the local directory.
+
+## After deployment
+Once Railway builds successfully (should take under 2 minutes), visit `https://your-domain.up.railway.app/health` to confirm, then test the full CV upload flow in the app.
 
