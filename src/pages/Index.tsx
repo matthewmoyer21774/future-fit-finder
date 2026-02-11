@@ -11,7 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useNavigate, Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { programmes } from "@/data/programmes";
+
 
 interface ProfileData {
   jobTitle: string;
@@ -47,55 +47,39 @@ const Index = () => {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      let profile: Record<string, string>;
       let parsedName = contactName;
       let parsedEmail = contactEmail;
 
+      // Build request body for the Railway Python backend proxy
+      const requestBody: Record<string, string> = {};
+
       if (activeTab === "cv" && cvFile) {
-        setLoadingMessage("Analyzing your CV...");
-        const formDataUpload = new FormData();
-        formDataUpload.append("file", cvFile);
-
-        const parseRes = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-cv`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-            },
-            body: formDataUpload,
-          }
-        );
-
-        if (!parseRes.ok) {
-          const err = await parseRes.json();
-          throw new Error(err.error || "Failed to parse CV");
+        setLoadingMessage("Uploading & analyzing your CV...");
+        // Convert file to base64
+        const arrayBuffer = await cvFile.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
         }
-
-        const { profile: cvProfile } = await parseRes.json();
-        profile = cvProfile;
-        // Use CV-extracted name/email if user didn't provide them
-        if (!parsedName && cvProfile.name) parsedName = cvProfile.name;
-        if (!parsedEmail && cvProfile.email) parsedEmail = cvProfile.email;
+        requestBody.file_base64 = btoa(binary);
+        requestBody.file_name = cvFile.name;
       } else if (activeTab === "linkedin" && linkedinText) {
-        profile = {
-          jobTitle: "",
-          industry: "",
-          yearsExperience: "",
-          careerGoals: linkedinText,
-          areasOfInterest: "",
-        };
+        requestBody.linkedin_text = linkedinText;
       } else {
-        profile = { ...formData };
+        // Form mode: combine fields into career_goals text
+        const parts: string[] = [];
+        if (formData.jobTitle) parts.push(`Current role: ${formData.jobTitle}`);
+        if (formData.industry) parts.push(`Industry: ${formData.industry}`);
+        if (formData.yearsExperience) parts.push(`Experience: ${formData.yearsExperience} years`);
+        if (formData.careerGoals) parts.push(`Career goals: ${formData.careerGoals}`);
+        if (formData.areasOfInterest) parts.push(`Interests: ${formData.areasOfInterest}`);
+        requestBody.career_goals = parts.join(". ");
       }
 
-      const catalogue = programmes.map((p) =>
-        `---\nTitle: ${p.name}\nCategory: ${p.category}\nFee: ${p.fee}\nFormat: ${p.duration}\nLocation: ${p.location}\nStart: ${p.startDate}\nURL: ${p.url}\nDescription: ${p.description.slice(0, 300)}\nTarget: ${p.targetAudience}\nWhy: ${p.whyThisProgramme.slice(0, 200)}`
-      ).join("\n");
-
-      setLoadingMessage("Finding your perfect programmes...");
-      const { data, error } = await supabase.functions.invoke("recommend", {
-        body: { profile, catalogue },
+      setLoadingMessage("Running AI pipeline (parsing → classifying → searching → synthesizing)...");
+      const { data, error } = await supabase.functions.invoke("backend-proxy", {
+        body: requestBody,
       });
 
       if (error) throw new Error(error.message || "Failed to get recommendations");
@@ -106,14 +90,14 @@ const Index = () => {
           name: parsedName || null,
           email: parsedEmail || null,
           wantsInfo,
-          profile,
+          profile: data.profile || {},
           recommendations: data.recommendations,
           outreachEmail: data.outreachEmail,
           inputMethod: activeTab,
         },
       }).catch((e) => console.error("Failed to save submission:", e));
 
-      // Only pass recommendations to results page (no outreach email)
+      // Pass recommendations to results page
       navigate("/results", { state: { recommendations: data.recommendations } });
     } catch (e: any) {
       console.error("Submit error:", e);

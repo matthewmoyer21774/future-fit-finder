@@ -108,9 +108,14 @@ const Admin = () => {
               <p className="text-xs text-muted-foreground">Admin Dashboard</p>
             </div>
           </div>
-          <Link to="/">
-            <Button variant="outline" size="sm">Back to Home</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link to="/admin/architecture">
+              <Button variant="outline" size="sm">🔬 Architecture</Button>
+            </Link>
+            <Link to="/">
+              <Button variant="outline" size="sm">Back to Home</Button>
+            </Link>
+          </div>
         </div>
       </header>
 
