@@ -62,9 +62,12 @@ const Index = () => {
         const { data: cvData, error: cvError } = await supabase.functions.invoke("parse-cv", {
           body: { file_base64: btoa(binary), file_name: cvFile.name },
         });
-        if (cvError) throw new Error("Failed to parse CV");
-        // Use parsed CV text as the profile summary
-        profile.cv_summary = cvData?.text || cvData?.content || "CV uploaded but could not be parsed";
+        if (cvError) throw new Error(cvData?.error || "Failed to parse CV");
+        // Use the structured profile extracted from CV
+        const cvProfile = cvData?.profile || {};
+        Object.entries(cvProfile).forEach(([k, v]) => {
+          if (v) profile[k] = String(v);
+        });
       } else if (activeTab === "linkedin" && linkedinText) {
         profile.linkedin_profile = linkedinText;
       } else {
