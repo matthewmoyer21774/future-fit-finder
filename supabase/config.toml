@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.recommend]
 verify_jwt = false
+
+[functions.save-submission]
+verify_jwt = false
+
+[functions.admin-auth]
+verify_jwt = false
