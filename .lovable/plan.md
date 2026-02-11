@@ -1,71 +1,97 @@
 
 
-# Admin View and Lead Capture System
+# Switch to Python RAG Backend (Railway) + Live Architecture View
 
 ## Overview
-Add contact information capture to the user-facing form, store all submissions in the database, and create a password-protected admin dashboard where Vlerick staff can view leads and their recommendations.
+Replace the current backend recommendation logic with the Python FastAPI backend deployed on Railway, and add a live pipeline visualization page in the admin dashboard that shows each processing step in real-time.
 
-## What Changes for Users
-- The manual form gets two new fields: **Name** and **Email**, plus a checkbox: **"I'd like to receive more information"**
-- When a CV is uploaded, the parser already extracts the name; we'll also try to extract email from the CV
-- The **outreach email section is removed** from the user-facing results page -- users only see their 3 programme recommendations
-- The outreach email and contact details are visible only in the admin view
+## Part 1: Railway Python Backend Integration
 
-## Admin Dashboard
-- Accessible at `/admin` with a simple password gate (no full auth system -- just a shared password stored as a backend secret)
-- Shows a table of all submissions: name, email, date, job title, industry, "wants info" flag, and a button to expand and see their recommendations + outreach email
-- Admins can see the full outreach email draft for each lead
+### What changes
+The Lovable frontend will call your Python FastAPI server (deployed on Railway) instead of the current backend recommendation function. This means the full Python pipeline runs: CV parsing -> profile extraction -> zero-shot classification (BART) -> ChromaDB vector search -> GPT-4o-mini synthesis.
 
-## Database
-A new `submissions` table stores each lead:
+### Steps
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | uuid (PK) | Auto-generated |
-| created_at | timestamptz | Submission time |
-| name | text | From form or CV |
-| email | text | From form or CV |
-| wants_info | boolean | Checkbox value |
-| profile | jsonb | The full profile data sent to the AI |
-| recommendations | jsonb | The 3 recommendations returned |
-| outreach_email | text | The draft email returned |
-| input_method | text | "form", "cv", or "linkedin" |
+**1. Prepare Python backend for Railway**
+- Add a `Dockerfile` or `Procfile` and `railway.json` to `backend/`
+- Add a `Nixpacks`-compatible setup (Railway auto-detects Python)
+- The backend needs `OPENAI_API_KEY` set as a Railway env var
+- ChromaDB data must be built at deploy time (add `build_vectordb.py` to the build step or pre-build it)
+- The `programme_pages/` folder must be accessible to the backend
 
-RLS: Public insert (anon can write), select restricted to service role only (admin edge function reads it).
+**2. Create a proxy edge function (`backend-proxy`)**
+- A new backend function that forwards requests to the Railway FastAPI URL
+- This avoids CORS issues and keeps the Railway URL private
+- Stores `RAILWAY_BACKEND_URL` as a secret
+- Forwards the CV file (as base64) + career goals + linkedin text to Railway's `/recommend` endpoint
 
-## Technical Steps
+**3. Update `Index.tsx`**
+- Change the submission flow to call the proxy function
+- Pass raw inputs (CV file, form data, linkedin text) rather than pre-parsed profile
+- The Python backend handles all parsing and processing
+- The proxy returns: `profile`, `top_categories`, `recommendations`, `email_draft`
 
-### 1. Database migration
-- Create `submissions` table with columns above
-- Enable RLS with anon INSERT policy and no public SELECT
+**4. Update `Results.tsx`**
+- Adapt to the slightly different response shape from the Python backend (e.g. `title` vs `programmeTitle`, `reason` vs `reasoning`)
 
-### 2. Update `parse-cv` edge function
-- Add `email` to the `extract_profile` tool schema so Gemini extracts it from CVs
+**5. Update `save-submission`**
+- Adapt field mapping for the Python backend response format
 
-### 3. Update manual form (`Index.tsx`)
-- Add Name, Email fields and "I'd like more information" checkbox to the form tab
-- After getting recommendations, save the submission to the database via an edge function
-- Remove outreach email from the data passed to the Results page
+## Part 2: Live Pipeline Visualization (Admin)
 
-### 4. Create `save-submission` edge function
-- Accepts profile, recommendations, outreach email, contact info
-- Inserts into `submissions` table using service role
-- Called after recommendations are returned
+### What it shows
+A new tab/page in the admin dashboard with an animated pipeline diagram. When a recommendation request runs, each stage lights up in sequence:
 
-### 5. Update Results page (`Results.tsx`)
-- Remove the outreach email section entirely from the user view
-- Keep only the 3 recommendation cards
+```text
+[Upload CV] --> [Parse Text] --> [Extract Profile] --> [Zero-Shot Classify] --> [Vector Search (ChromaDB)] --> [LLM Synthesis (GPT-4o-mini)] --> [Results]
+```
 
-### 6. Create Admin page (`src/pages/Admin.tsx`)
-- Simple password input screen (password checked against a secret via edge function)
-- Once authenticated, shows a table of all submissions
-- Click to expand: see full recommendations and outreach email for each lead
-- Add route `/admin` in `App.tsx`
+### Implementation
 
-### 7. Create `admin-auth` edge function
-- Accepts password, compares against `ADMIN_PASSWORD` secret
-- Returns submissions list if correct
+**1. Create `src/pages/AdminArchitecture.tsx`**
+- Visual pipeline with animated nodes using Framer Motion
+- Each node shows: stage name, technology used, brief description
+- A "Run Demo" button that simulates the pipeline with timed animations
+- Shows sample data flowing between stages (e.g. "Extracted 3 categories: Strategy (85%), Leadership (72%)...")
 
-### 8. Add `ADMIN_PASSWORD` secret
-- Prompt user to set it via the secrets tool
+**2. Add architecture route**
+- Add `/admin/architecture` route in `App.tsx`
+- Add a tab or nav link in the Admin page header
+
+### Pipeline nodes displayed:
+1. **Input** -- CV/Form/LinkedIn text
+2. **Text Extraction** -- PyPDF / python-docx
+3. **Profile Extraction** -- GPT-4o-mini structured extraction
+4. **Zero-Shot Classification** -- facebook/bart-large-mnli -> top 3 categories
+5. **Vector Search** -- ChromaDB + all-MiniLM-L6-v2 embeddings -> top 8 matches
+6. **LLM Synthesis** -- GPT-4o-mini RAG -> top 3 recommendations + email draft
+7. **Output** -- Recommendations + outreach email
+
+Each node animates from grey to green with a progress indicator when the demo runs.
+
+## Technical Details
+
+### New secret needed
+- `RAILWAY_BACKEND_URL` -- the public URL of your Railway deployment (e.g. `https://your-app.up.railway.app`)
+
+### Files to create
+- `supabase/functions/backend-proxy/index.ts` -- proxy to Railway
+- `src/pages/AdminArchitecture.tsx` -- live pipeline page
+- `backend/Procfile` -- `web: uvicorn main:app --host 0.0.0.0 --port $PORT`
+- `backend/railway.json` -- build config
+
+### Files to modify
+- `src/pages/Index.tsx` -- call proxy instead of current functions
+- `src/pages/Results.tsx` -- adapt response shape
+- `src/pages/Admin.tsx` -- add link to architecture page
+- `src/App.tsx` -- add `/admin/architecture` route
+- `supabase/config.toml` -- add `backend-proxy` function config
+- `supabase/functions/save-submission/index.ts` -- adapt field names
+
+### Railway deployment steps (you do this outside Lovable)
+1. Push the `backend/` folder to a GitHub repo
+2. Connect it to Railway
+3. Set env vars: `OPENAI_API_KEY`, `PORT`
+4. Railway will auto-detect Python, install requirements, and run uvicorn
+5. Run `python build_vectordb.py` as part of the build or include pre-built `chroma_db/`
 
