@@ -1,53 +1,21 @@
 
 
-# Route the Frontend Through the Python Backend
+# Fix: Vector DB Build Crash
 
-## The Problem
+## Root Cause
 
-The main recommendation flow in `Index.tsx` calls two edge functions that use Lovable AI (Gemini):
-- `parse-cv` -- parses CVs using Gemini
-- `recommend` -- generates recommendations using Gemini
+The file `backend/programme_pages/programmes_database.json` is a **JSON array** (a list of all 62 programmes), not a single programme dict like the other `.json` files. The `load_programmes()` function in `build_vectordb.py` loads it via glob, and since it's a list, calling `.get()` on it fails with `'list' object has no attribute 'get'`.
 
-Your Python backend on Railway does ALL of this (parse + profile + classify + vector search + recommend) in a single `/recommend` endpoint. The `backend-proxy` edge function already exists to forward requests there, but nothing in the main flow uses it.
+The same bug exists in `main.py`'s `/programmes` endpoint.
 
-## The Fix
+## Fix
 
-**One file change**: Update `Index.tsx` to call `backend-proxy` instead of `parse-cv` + `recommend`.
-
-The Python backend's `/recommend` endpoint accepts:
-- `file` (multipart upload)
-- `career_goals` (form field)
-- `linkedin_url` (form field)
-
-The `backend-proxy` edge function already converts these from JSON/base64 to multipart and maps the response to the frontend format (`programmeTitle`, `category`, `reasoning`, etc.).
-
-### What changes in `Index.tsx`:
-
-1. **Remove** the two-step flow (parse-cv then recommend)
-2. **Replace** with a single call to `backend-proxy`, sending:
-   - `file_base64` + `file_name` for CV uploads
-   - `career_goals` built from form data or career goals text
-   - `linkedin_text` for LinkedIn input
-3. **Map** the response (already handled by `backend-proxy`)
-
-### For form input specifically:
-The Python backend expects `career_goals` as a text string. For form submissions, we'll concatenate the form fields into a descriptive string (e.g., "Marketing Manager in Technology with 5 years experience. Goals: transition to leadership. Interests: digital transformation").
-
-## Files to Modify
+Add a type check in both files: if the loaded JSON is not a `dict`, skip it.
 
 | File | Change |
 |------|--------|
-| `src/pages/Index.tsx` | Rewire `handleSubmit` to call `backend-proxy` instead of `parse-cv` + `recommend` |
+| `backend/build_vectordb.py` | Add `if not isinstance(data, dict): continue` after `json.load(data)` in `load_programmes()` |
+| `backend/main.py` | Add the same check in the `/programmes` endpoint's file loading loop |
 
-## What stays the same
-
-- `backend-proxy` edge function -- already correct, no changes needed
-- Python backend code -- already deployed/deploying on Railway
-- Results page -- already expects the same data shape
-- `save-submission` call -- stays as-is for database logging
-
-## Assumptions
-
-- Railway is deployed and the Python backend is running (you confirmed `OPENAI_API_KEY` is set)
-- If Railway is down, the call will fail with an error toast -- no silent fallback to edge functions (since you want the Python pipeline specifically)
+This is a one-line fix in each file. After redeploying to Railway, the vector DB will build successfully and recommendations will work end-to-end.
 
