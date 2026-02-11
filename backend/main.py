@@ -83,6 +83,8 @@ def list_programmes():
     for path in json_files:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            continue
         if "error" in data:
             continue
         programmes.append({
