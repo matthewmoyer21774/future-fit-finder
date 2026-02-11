@@ -47,57 +47,47 @@ const Index = () => {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      let parsedName = contactName;
-      let parsedEmail = contactEmail;
-
-      // Build request body for the Railway Python backend proxy
-      const requestBody: Record<string, string> = {};
+      // Build profile object for the recommend edge function
+      const profile: Record<string, string> = {};
 
       if (activeTab === "cv" && cvFile) {
         setLoadingMessage("Uploading & analyzing your CV...");
-        // Convert file to base64
+        // For CV mode, parse the CV first via parse-cv, then use the extracted text
         const arrayBuffer = await cvFile.arrayBuffer();
         const bytes = new Uint8Array(arrayBuffer);
         let binary = "";
         for (let i = 0; i < bytes.length; i++) {
           binary += String.fromCharCode(bytes[i]);
         }
-        requestBody.file_base64 = btoa(binary);
-        requestBody.file_name = cvFile.name;
+        const { data: cvData, error: cvError } = await supabase.functions.invoke("parse-cv", {
+          body: { file_base64: btoa(binary), file_name: cvFile.name },
+        });
+        if (cvError) throw new Error("Failed to parse CV");
+        // Use parsed CV text as the profile summary
+        profile.cv_summary = cvData?.text || cvData?.content || "CV uploaded but could not be parsed";
       } else if (activeTab === "linkedin" && linkedinText) {
-        requestBody.linkedin_text = linkedinText;
+        profile.linkedin_profile = linkedinText;
       } else {
-        // Form mode: combine fields into career_goals text
-        const parts: string[] = [];
-        if (formData.jobTitle) parts.push(`Current role: ${formData.jobTitle}`);
-        if (formData.industry) parts.push(`Industry: ${formData.industry}`);
-        if (formData.yearsExperience) parts.push(`Experience: ${formData.yearsExperience} years`);
-        if (formData.careerGoals) parts.push(`Career goals: ${formData.careerGoals}`);
-        if (formData.areasOfInterest) parts.push(`Interests: ${formData.areasOfInterest}`);
-        requestBody.career_goals = parts.join(". ");
+        if (formData.jobTitle) profile.jobTitle = formData.jobTitle;
+        if (formData.industry) profile.industry = formData.industry;
+        if (formData.yearsExperience) profile.yearsExperience = `${formData.yearsExperience} years`;
+        if (formData.careerGoals) profile.careerGoals = formData.careerGoals;
+        if (formData.areasOfInterest) profile.areasOfInterest = formData.areasOfInterest;
       }
 
-      setLoadingMessage("Running AI pipeline (parsing → classifying → searching → synthesizing)...");
-      const { data, error } = await supabase.functions.invoke("backend-proxy", {
-        body: requestBody,
+      setLoadingMessage("Finding your best programme matches...");
+      const { data, error } = await supabase.functions.invoke("recommend", {
+        body: { profile },
       });
 
       if (error) {
-        // Check if it's a "still loading" error (503)
-        if (data?.error && data.error.includes("starting up")) {
-          toast({
-            title: "System is warming up",
-            description: "The AI engine is still initializing. Please wait 30-60 seconds and try again.",
-          });
-          return;
-        }
         throw new Error(data?.error || error.message || "Failed to get recommendations");
       }
 
       if (!data?.recommendations?.length) {
         toast({
           title: "No recommendations returned",
-          description: "The AI engine may still be warming up. Please wait a moment and try again.",
+          description: "Please try again in a moment.",
         });
         return;
       }
@@ -105,10 +95,10 @@ const Index = () => {
       // Save submission in background (don't block user)
       supabase.functions.invoke("save-submission", {
         body: {
-          name: parsedName || null,
-          email: parsedEmail || null,
+          name: contactName || null,
+          email: contactEmail || null,
           wantsInfo,
-          profile: data.profile || {},
+          profile,
           recommendations: data.recommendations,
           outreachEmail: data.outreachEmail,
           inputMethod: activeTab,

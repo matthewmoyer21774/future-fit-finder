@@ -14,6 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
+      programmes: {
+        Row: {
+          category: string
+          created_at: string
+          description: string
+          fee: string | null
+          format: string | null
+          full_text: string | null
+          id: string
+          key_topics: string[] | null
+          location: string | null
+          start_date: string | null
+          target_audience: string | null
+          title: string
+          url: string
+          why_this_programme: string | null
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          description?: string
+          fee?: string | null
+          format?: string | null
+          full_text?: string | null
+          id?: string
+          key_topics?: string[] | null
+          location?: string | null
+          start_date?: string | null
+          target_audience?: string | null
+          title: string
+          url: string
+          why_this_programme?: string | null
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          description?: string
+          fee?: string | null
+          format?: string | null
+          full_text?: string | null
+          id?: string
+          key_topics?: string[] | null
+          location?: string | null
+          start_date?: string | null
+          target_audience?: string | null
+          title?: string
+          url?: string
+          why_this_programme?: string | null
+        }
+        Relationships: []
+      }
       submissions: {
         Row: {
           created_at: string

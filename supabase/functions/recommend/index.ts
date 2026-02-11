@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -12,7 +13,7 @@ serve(async (req) => {
   }
 
   try {
-    const { profile, catalogue } = await req.json();
+    const { profile } = await req.json();
 
     if (!profile) {
       return new Response(JSON.stringify({ error: "No profile provided" }), {
@@ -21,12 +22,38 @@ serve(async (req) => {
       });
     }
 
-    if (!catalogue) {
-      return new Response(JSON.stringify({ error: "No catalogue provided" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // Load catalogue from database
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const { data: programmes, error: dbError } = await supabase
+      .from("programmes")
+      .select("title, category, description, url, fee, format, location, start_date, target_audience, why_this_programme, key_topics, full_text");
+
+    if (dbError) {
+      console.error("DB error:", dbError);
+      throw new Error("Failed to load programme catalogue");
     }
+
+    if (!programmes || programmes.length === 0) {
+      throw new Error("Programme catalogue is empty. Please seed the database first.");
+    }
+
+    // Build catalogue string for the AI
+    const catalogue = programmes.map((p) => {
+      const parts = [`PROGRAMME: ${p.title}`];
+      if (p.category) parts.push(`Category: ${p.category}`);
+      if (p.description) parts.push(`Description: ${p.description}`);
+      if (p.fee) parts.push(`Fee: ${p.fee}`);
+      if (p.format) parts.push(`Format: ${p.format}`);
+      if (p.location) parts.push(`Location: ${p.location}`);
+      if (p.start_date) parts.push(`Start date: ${p.start_date}`);
+      if (p.target_audience) parts.push(`Target audience: ${p.target_audience}`);
+      if (p.why_this_programme) parts.push(`Why this programme: ${p.why_this_programme}`);
+      if (p.url) parts.push(`URL: ${p.url}`);
+      return parts.join("\n");
+    }).join("\n\n---\n\n");
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
@@ -132,16 +159,14 @@ ${catalogue}`;
 
     const data = await response.json();
     console.log("AI response structure:", JSON.stringify(data.choices?.[0]?.message, null, 2));
-    
+
     const message = data.choices?.[0]?.message;
     let result;
 
-    // Try tool_calls first
     const toolCall = message?.tool_calls?.[0];
     if (toolCall) {
       result = JSON.parse(toolCall.function.arguments);
     } else if (message?.content) {
-      // Fallback: parse from content (some models return JSON in content)
       let content = message.content.trim();
       if (content.startsWith("```")) {
         content = content.split("```")[1];
@@ -157,7 +182,6 @@ ${catalogue}`;
       throw new Error("No recommendations returned from AI");
     }
 
-    // Validate structure
     if (!result.recommendations || !Array.isArray(result.recommendations)) {
       console.error("Invalid result structure:", JSON.stringify(result).substring(0, 500));
       throw new Error("No recommendations returned from AI");
