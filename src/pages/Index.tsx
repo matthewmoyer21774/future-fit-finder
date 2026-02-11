@@ -82,7 +82,25 @@ const Index = () => {
         body: requestBody,
       });
 
-      if (error) throw new Error(error.message || "Failed to get recommendations");
+      if (error) {
+        // Check if it's a "still loading" error (503)
+        if (data?.error && data.error.includes("starting up")) {
+          toast({
+            title: "System is warming up",
+            description: "The AI engine is still initializing. Please wait 30-60 seconds and try again.",
+          });
+          return;
+        }
+        throw new Error(data?.error || error.message || "Failed to get recommendations");
+      }
+
+      if (!data?.recommendations?.length) {
+        toast({
+          title: "No recommendations returned",
+          description: "The AI engine may still be warming up. Please wait a moment and try again.",
+        });
+        return;
+      }
 
       // Save submission in background (don't block user)
       supabase.functions.invoke("save-submission", {
