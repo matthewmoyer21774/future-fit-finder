@@ -7,6 +7,7 @@ Run this once before starting the API server.
 import json
 import os
 import glob
+import time
 import chromadb
 from chromadb.utils import embedding_functions
 
@@ -156,10 +157,29 @@ def main():
         print(f"  [{i+1}/{len(programmes)}] {meta['title'][:50]}... "
               f"({len(doc)} chars, category: {meta['category']})")
 
-    # Add all documents to ChromaDB
-    print(f"\nEmbedding {len(documents)} documents...")
-    # ChromaDB handles batching internally
-    collection.add(documents=documents, metadatas=metadatas, ids=ids)
+    # Add documents in batches with retry logic
+    BATCH_SIZE = 20
+    MAX_RETRIES = 3
+    print(f"\nEmbedding {len(documents)} documents in batches of {BATCH_SIZE}...")
+
+    for start in range(0, len(documents), BATCH_SIZE):
+        end = min(start + BATCH_SIZE, len(documents))
+        batch_docs = documents[start:end]
+        batch_metas = metadatas[start:end]
+        batch_ids = ids[start:end]
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                collection.add(documents=batch_docs, metadatas=batch_metas, ids=batch_ids)
+                print(f"  Batch {start // BATCH_SIZE + 1} ({start+1}-{end}) embedded OK")
+                break
+            except Exception as e:
+                wait = 2 ** attempt
+                print(f"  Batch {start // BATCH_SIZE + 1} attempt {attempt} failed: {e}")
+                if attempt == MAX_RETRIES:
+                    raise
+                print(f"  Retrying in {wait}s...")
+                time.sleep(wait)
 
     print(f"\n{'=' * 50}")
     print(f"  Vector DB built successfully!")
