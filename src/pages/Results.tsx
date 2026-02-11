@@ -1,10 +1,9 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ArrowLeft, ExternalLink, Copy, Check, GraduationCap, MapPin, Calendar, Clock, DollarSign } from "lucide-react";
+import { ArrowLeft, ExternalLink, GraduationCap, MapPin, Calendar, Clock, DollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { useState } from "react";
 
 interface Recommendation {
   programmeTitle: string;
@@ -19,13 +18,11 @@ interface Recommendation {
 
 interface ResultsState {
   recommendations: Recommendation[];
-  outreachEmail: string;
 }
 
 const Results = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const [copied, setCopied] = useState(false);
 
   const state = location.state as ResultsState | undefined;
 
@@ -42,17 +39,10 @@ const Results = () => {
     );
   }
 
-  const { recommendations, outreachEmail } = state;
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(outreachEmail);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const { recommendations } = state;
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border bg-card">
         <div className="container mx-auto flex items-center justify-between px-4 py-4">
           <div className="flex items-center gap-3">
@@ -77,8 +67,7 @@ const Results = () => {
           <p className="mb-8 text-muted-foreground">Based on your profile, here are the programmes we recommend.</p>
         </motion.div>
 
-        {/* Recommendation Cards */}
-        <div className="mb-12 grid gap-6 md:grid-cols-3">
+        <div className="grid gap-6 md:grid-cols-3">
           {recommendations.map((rec, i) => (
             <motion.div
               key={i}
@@ -124,12 +113,7 @@ const Results = () => {
                     )}
                   </div>
 
-                  <a
-                    href={rec.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-2"
-                  >
+                  <a href={rec.url} target="_blank" rel="noopener noreferrer" className="mt-2">
                     <Button variant="outline" size="sm" className="w-full gap-2">
                       View Programme
                       <ExternalLink className="h-3.5 w-3.5" />
@@ -140,30 +124,6 @@ const Results = () => {
             </motion.div>
           ))}
         </div>
-
-        {/* Outreach Email */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.5 }}
-        >
-          <Card className="border-border">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-xl">Draft Outreach Email</CardTitle>
-                <Button variant="ghost" size="sm" onClick={handleCopy} className="gap-2">
-                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  {copied ? "Copied!" : "Copy"}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <pre className="whitespace-pre-wrap rounded-lg bg-muted p-4 text-sm text-foreground font-sans leading-relaxed">
-                {outreachEmail}
-              </pre>
-            </CardContent>
-          </Card>
-        </motion.div>
       </main>
     </div>
   );

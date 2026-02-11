@@ -7,6 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useNavigate, Link } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -28,6 +29,9 @@ const Index = () => {
   const [linkedinText, setLinkedinText] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [wantsInfo, setWantsInfo] = useState(false);
   const [formData, setFormData] = useState<ProfileData>({
     jobTitle: "",
     industry: "",
@@ -44,9 +48,10 @@ const Index = () => {
     setLoading(true);
     try {
       let profile: Record<string, string>;
+      let parsedName = contactName;
+      let parsedEmail = contactEmail;
 
       if (activeTab === "cv" && cvFile) {
-        // Step 1: Parse CV
         setLoadingMessage("Analyzing your CV...");
         const formDataUpload = new FormData();
         formDataUpload.append("file", cvFile);
@@ -69,8 +74,10 @@ const Index = () => {
 
         const { profile: cvProfile } = await parseRes.json();
         profile = cvProfile;
+        // Use CV-extracted name/email if user didn't provide them
+        if (!parsedName && cvProfile.name) parsedName = cvProfile.name;
+        if (!parsedEmail && cvProfile.email) parsedEmail = cvProfile.email;
       } else if (activeTab === "linkedin" && linkedinText) {
-        // Treat LinkedIn text as a mini-CV
         profile = {
           jobTitle: "",
           industry: "",
@@ -82,12 +89,10 @@ const Index = () => {
         profile = { ...formData };
       }
 
-      // Step 2: Build compact catalogue for the AI
       const catalogue = programmes.map((p) =>
         `---\nTitle: ${p.name}\nCategory: ${p.category}\nFee: ${p.fee}\nFormat: ${p.duration}\nLocation: ${p.location}\nStart: ${p.startDate}\nURL: ${p.url}\nDescription: ${p.description.slice(0, 300)}\nTarget: ${p.targetAudience}\nWhy: ${p.whyThisProgramme.slice(0, 200)}`
       ).join("\n");
 
-      // Step 3: Get recommendations
       setLoadingMessage("Finding your perfect programmes...");
       const { data, error } = await supabase.functions.invoke("recommend", {
         body: { profile, catalogue },
@@ -95,7 +100,21 @@ const Index = () => {
 
       if (error) throw new Error(error.message || "Failed to get recommendations");
 
-      navigate("/results", { state: data });
+      // Save submission in background (don't block user)
+      supabase.functions.invoke("save-submission", {
+        body: {
+          name: parsedName || null,
+          email: parsedEmail || null,
+          wantsInfo,
+          profile,
+          recommendations: data.recommendations,
+          outreachEmail: data.outreachEmail,
+          inputMethod: activeTab,
+        },
+      }).catch((e) => console.error("Failed to save submission:", e));
+
+      // Only pass recommendations to results page (no outreach email)
+      navigate("/results", { state: { recommendations: data.recommendations } });
     } catch (e: any) {
       console.error("Submit error:", e);
       toast({
@@ -171,6 +190,16 @@ const Index = () => {
                 <TabsContent value="form" className="space-y-4 text-left">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
+                      <Label htmlFor="contactName">Your Name</Label>
+                      <Input id="contactName" placeholder="e.g. Jane Doe" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="contactEmail">Your Email</Label>
+                      <Input id="contactEmail" type="email" placeholder="e.g. jane@company.com" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
                       <Label htmlFor="jobTitle">Current Job Title</Label>
                       <Input id="jobTitle" placeholder="e.g. Marketing Manager" value={formData.jobTitle} onChange={(e) => handleFormChange("jobTitle", e.target.value)} />
                     </div>
@@ -191,9 +220,25 @@ const Index = () => {
                     <Label htmlFor="areasOfInterest">Areas of Interest</Label>
                     <Textarea id="areasOfInterest" placeholder="e.g. Leadership, Digital Transformation, Sustainability" value={formData.areasOfInterest} onChange={(e) => handleFormChange("areasOfInterest", e.target.value)} rows={2} />
                   </div>
+                  <div className="flex items-center space-x-2 pt-2">
+                    <Checkbox id="wantsInfo" checked={wantsInfo} onCheckedChange={(checked) => setWantsInfo(checked === true)} />
+                    <Label htmlFor="wantsInfo" className="text-sm font-normal cursor-pointer">
+                      I'd like to receive more information about recommended programmes
+                    </Label>
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="cv" className="space-y-4 text-left">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="cvName">Your Name (optional)</Label>
+                      <Input id="cvName" placeholder="We'll try to extract from CV" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="cvEmail">Your Email (optional)</Label>
+                      <Input id="cvEmail" type="email" placeholder="We'll try to extract from CV" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+                    </div>
+                  </div>
                   <div
                     className="flex min-h-[200px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-muted/50 p-8 transition-colors hover:border-primary/50 hover:bg-muted"
                     onClick={() => document.getElementById("cv-upload")?.click()}
@@ -212,13 +257,35 @@ const Index = () => {
                     )}
                     <input id="cv-upload" type="file" accept=".pdf,.doc,.docx" className="hidden" onChange={(e) => setCvFile(e.target.files?.[0] || null)} />
                   </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox id="cvWantsInfo" checked={wantsInfo} onCheckedChange={(checked) => setWantsInfo(checked === true)} />
+                    <Label htmlFor="cvWantsInfo" className="text-sm font-normal cursor-pointer">
+                      I'd like to receive more information about recommended programmes
+                    </Label>
+                  </div>
                   <p className="text-sm text-muted-foreground">Your CV will be parsed by AI to extract your professional profile. No data is stored.</p>
                 </TabsContent>
 
                 <TabsContent value="linkedin" className="space-y-4 text-left">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="liName">Your Name</Label>
+                      <Input id="liName" placeholder="e.g. Jane Doe" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="liEmail">Your Email</Label>
+                      <Input id="liEmail" type="email" placeholder="e.g. jane@company.com" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+                    </div>
+                  </div>
                   <div className="space-y-2">
                     <Label htmlFor="linkedin">LinkedIn Profile Text</Label>
                     <Textarea id="linkedin" placeholder="Copy and paste your LinkedIn summary, experience section, or About text here..." value={linkedinText} onChange={(e) => setLinkedinText(e.target.value)} rows={8} />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox id="liWantsInfo" checked={wantsInfo} onCheckedChange={(checked) => setWantsInfo(checked === true)} />
+                    <Label htmlFor="liWantsInfo" className="text-sm font-normal cursor-pointer">
+                      I'd like to receive more information about recommended programmes
+                    </Label>
                   </div>
                   <p className="text-sm text-muted-foreground">Paste your LinkedIn profile text — we'll extract your experience and skills from it.</p>
                 </TabsContent>

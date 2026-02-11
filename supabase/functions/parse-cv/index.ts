@@ -15,6 +15,7 @@ const profileTool = {
       type: "object",
       properties: {
         name: { type: "string", description: "Full name" },
+        email: { type: "string", description: "Email address if present in the document" },
         jobTitle: { type: "string", description: "Current or most recent job title" },
         industry: { type: "string", description: "Primary industry" },
         yearsExperience: { type: "string", description: "Estimated years of professional experience" },
