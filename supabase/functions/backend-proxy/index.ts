@@ -39,7 +39,12 @@ serve(async (req) => {
       formData.append("linkedin_url", linkedin_text);
     }
 
-    const backendUrl = `${RAILWAY_BACKEND_URL.replace(/\/$/, "")}/recommend`;
+    // Ensure protocol is present
+    let baseUrl = RAILWAY_BACKEND_URL.replace(/\/$/, "");
+    if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+      baseUrl = `https://${baseUrl}`;
+    }
+    const backendUrl = `${baseUrl}/recommend`;
     console.log("Proxying to:", backendUrl);
 
     const response = await fetch(backendUrl, {
