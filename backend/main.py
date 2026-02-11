@@ -92,6 +92,13 @@ async def get_recommendations(
         if linkedin_text:
             cv_text += "\n\n" + linkedin_text
 
+    if file and not cv_text:
+        return {
+            "error": "Could not extract text from your file. Please try a different format (PDF or DOCX) or use the manual form instead.",
+            "recommendations": [],
+            "email_draft": "",
+        }
+
     if not cv_text and not career_goals:
         return {
             "error": "Please upload a CV or provide career goals.",
