@@ -1,39 +1,71 @@
 
 
-# Fix CV/Resume Parser
+# Admin View and Lead Capture System
 
-## Problem
-The current `parse-cv` edge function tries to extract text from PDFs using naive regex matching on raw bytes (looking for text between parentheses in PDF stream objects). This produces garbled or empty text for most real-world PDFs, causing the AI to hallucinate a profile instead of reading the actual resume.
+## Overview
+Add contact information capture to the user-facing form, store all submissions in the database, and create a password-protected admin dashboard where Vlerick staff can view leads and their recommendations.
 
-For example, Babette Van Reusel's resume (biomedical engineering student at Vlerick) was parsed as a "Senior Software Engineer with 10 years experience" -- completely fabricated.
+## What Changes for Users
+- The manual form gets two new fields: **Name** and **Email**, plus a checkbox: **"I'd like to receive more information"**
+- When a CV is uploaded, the parser already extracts the name; we'll also try to extract email from the CV
+- The **outreach email section is removed** from the user-facing results page -- users only see their 3 programme recommendations
+- The outreach email and contact details are visible only in the admin view
 
-## Solution
-Replace the manual text extraction with Gemini's native PDF support. Instead of trying to parse PDF bytes into text, send the raw PDF file as a base64-encoded document directly to the AI model. Gemini can read PDFs natively and extract all the information accurately.
+## Admin Dashboard
+- Accessible at `/admin` with a simple password gate (no full auth system -- just a shared password stored as a backend secret)
+- Shows a table of all submissions: name, email, date, job title, industry, "wants info" flag, and a button to expand and see their recommendations + outreach email
+- Admins can see the full outreach email draft for each lead
 
-## Changes
+## Database
+A new `submissions` table stores each lead:
 
-### 1. Rewrite `supabase/functions/parse-cv/index.ts`
-- Remove the broken regex-based PDF text extraction (lines 30-65)
-- Instead, convert the uploaded file to base64
-- Send it to Gemini as an `inline_data` part with `mimeType: "application/pdf"`
-- Gemini will read the PDF visually/natively and extract the profile accurately
-- Keep the same structured output format (tool calling with `extract_profile`)
+| Column | Type | Description |
+|--------|------|-------------|
+| id | uuid (PK) | Auto-generated |
+| created_at | timestamptz | Submission time |
+| name | text | From form or CV |
+| email | text | From form or CV |
+| wants_info | boolean | Checkbox value |
+| profile | jsonb | The full profile data sent to the AI |
+| recommendations | jsonb | The 3 recommendations returned |
+| outreach_email | text | The draft email returned |
+| input_method | text | "form", "cv", or "linkedin" |
 
-### 2. No frontend changes needed
-The `Index.tsx` and `Results.tsx` pages already handle the profile and recommendations correctly. Only the backend PDF parsing logic needs fixing.
+RLS: Public insert (anon can write), select restricted to service role only (admin edge function reads it).
 
-## Technical Details
+## Technical Steps
 
-The key change in the edge function:
+### 1. Database migration
+- Create `submissions` table with columns above
+- Enable RLS with anon INSERT policy and no public SELECT
 
-```text
-Before: Upload -> regex extract text from bytes -> send text to AI -> get profile
-After:  Upload -> base64 encode PDF -> send PDF directly to AI as multimodal input -> get profile
-```
+### 2. Update `parse-cv` edge function
+- Add `email` to the `extract_profile` tool schema so Gemini extracts it from CVs
 
-The Gemini model supports PDF files as inline data parts using:
-- `type: "image_url"` with a `data:application/pdf;base64,...` URL
-- This lets the model "see" the full PDF including formatting, layout, and all text
+### 3. Update manual form (`Index.tsx`)
+- Add Name, Email fields and "I'd like more information" checkbox to the form tab
+- After getting recommendations, save the submission to the database via an edge function
+- Remove outreach email from the data passed to the Results page
 
-This approach works for both text-based and scanned PDFs (since Gemini has OCR capabilities built in).
+### 4. Create `save-submission` edge function
+- Accepts profile, recommendations, outreach email, contact info
+- Inserts into `submissions` table using service role
+- Called after recommendations are returned
+
+### 5. Update Results page (`Results.tsx`)
+- Remove the outreach email section entirely from the user view
+- Keep only the 3 recommendation cards
+
+### 6. Create Admin page (`src/pages/Admin.tsx`)
+- Simple password input screen (password checked against a secret via edge function)
+- Once authenticated, shows a table of all submissions
+- Click to expand: see full recommendations and outreach email for each lead
+- Add route `/admin` in `App.tsx`
+
+### 7. Create `admin-auth` edge function
+- Accepts password, compares against `ADMIN_PASSWORD` secret
+- Returns submissions list if correct
+
+### 8. Add `ADMIN_PASSWORD` secret
+- Prompt user to set it via the secrets tool
 
