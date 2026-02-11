@@ -84,6 +84,11 @@ const Index = () => {
         throw new Error(data?.error || error.message || "Failed to get recommendations");
       }
 
+      // Check for error in response body (e.g. backend still starting up)
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
       if (!data?.recommendations?.length) {
         toast({
           title: "No recommendations returned",

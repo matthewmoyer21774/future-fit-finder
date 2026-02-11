@@ -55,16 +55,29 @@ serve(async (req) => {
     if (!response.ok) {
       const errText = await response.text();
       console.error("Backend error:", response.status, errText);
-      throw new Error(`Backend error: ${response.status}`);
+      // Try to parse JSON error from backend
+      try {
+        const errJson = JSON.parse(errText);
+        if (errJson.error) {
+          return new Response(
+            JSON.stringify({ error: errJson.error }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      } catch (_) { /* not JSON */ }
+      return new Response(
+        JSON.stringify({ error: `Backend returned status ${response.status}` }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     const data = await response.json();
 
-    // If the backend says it's still starting up, return a specific error
+    // If the backend says it's still starting up, return error in 200 response
     if (data.error) {
       return new Response(
         JSON.stringify({ error: data.error }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
