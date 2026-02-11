@@ -113,9 +113,13 @@ def main():
     print(f"  Found {len(programmes)} programmes\n")
 
     # Set up ChromaDB with OpenAI embeddings
+    # ChromaDB requires CHROMA_OPENAI_API_KEY env var; fall back from OPENAI_API_KEY
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if api_key and not os.environ.get("CHROMA_OPENAI_API_KEY"):
+        os.environ["CHROMA_OPENAI_API_KEY"] = api_key
     print("Initializing ChromaDB with OpenAI embeddings...")
     ef = embedding_functions.OpenAIEmbeddingFunction(
-        api_key=os.environ.get("OPENAI_API_KEY"),
+        api_key=api_key,
         model_name="text-embedding-3-small",
     )
 
