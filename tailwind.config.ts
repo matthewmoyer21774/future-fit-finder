@@ -57,6 +57,12 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        vlerick: {
+          navy: "hsl(var(--vlerick-navy))",
+          blue: "hsl(var(--vlerick-blue))",
+          gold: "hsl(var(--vlerick-gold))",
+          light: "hsl(var(--vlerick-light))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
