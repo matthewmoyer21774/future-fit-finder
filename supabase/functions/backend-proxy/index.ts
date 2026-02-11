@@ -60,6 +60,14 @@ serve(async (req) => {
 
     const data = await response.json();
 
+    // If the backend says it's still starting up, return a specific error
+    if (data.error) {
+      return new Response(
+        JSON.stringify({ error: data.error }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // Map Python backend response to frontend format
     const recommendations = (data.recommendations || []).map((rec: Record<string, string>) => ({
       programmeTitle: rec.title || rec.programmeTitle || "",
