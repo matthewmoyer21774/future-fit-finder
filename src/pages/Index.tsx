@@ -71,6 +71,9 @@ const Index = () => {
         if (formData.yearsExperience) parts.push(`${formData.yearsExperience} years of experience`);
         if (formData.careerGoals) parts.push(`Goals: ${formData.careerGoals}`);
         if (formData.areasOfInterest) parts.push(`Interests: ${formData.areasOfInterest}`);
+        if (parts.length === 0) {
+          throw new Error("Please fill in at least your job title or career goals.");
+        }
         body.career_goals = parts.join(". ");
       }
 
