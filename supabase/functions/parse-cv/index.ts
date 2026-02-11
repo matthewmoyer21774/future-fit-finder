@@ -41,27 +41,18 @@ serve(async (req) => {
   }
 
   try {
-    const formData = await req.formData();
-    const file = formData.get("file") as File | null;
+    const body = await req.json();
+    const { file_base64, file_name } = body;
 
-    if (!file) {
-      return new Response(JSON.stringify({ error: "No file uploaded" }), {
+    if (!file_base64) {
+      return new Response(JSON.stringify({ error: "No file provided" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Convert file to base64
-    const arrayBuffer = await file.arrayBuffer();
-    const uint8 = new Uint8Array(arrayBuffer);
-    let base64 = "";
-    const chunkSize = 8192;
-    for (let i = 0; i < uint8.length; i += chunkSize) {
-      base64 += String.fromCharCode(...uint8.subarray(i, i + chunkSize));
-    }
-    base64 = btoa(base64);
-
-    const isPdf = file.name.toLowerCase().endsWith(".pdf");
+    const base64 = file_base64;
+    const isPdf = (file_name || "").toLowerCase().endsWith(".pdf");
     const mimeType = isPdf ? "application/pdf" : "application/octet-stream";
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
