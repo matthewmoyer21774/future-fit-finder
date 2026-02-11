@@ -10,7 +10,7 @@ import glob
 import chromadb
 from chromadb.utils import embedding_functions
 
-PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "..", "programme_pages")
+PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
 CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
 COLLECTION_NAME = "vlerick_programmes"
 
@@ -112,10 +112,11 @@ def main():
     programmes = load_programmes()
     print(f"  Found {len(programmes)} programmes\n")
 
-    # Set up ChromaDB with sentence-transformers embeddings
-    print("Initializing ChromaDB with sentence-transformers...")
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-MiniLM-L6-v2"
+    # Set up ChromaDB with OpenAI embeddings
+    print("Initializing ChromaDB with OpenAI embeddings...")
+    ef = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        model_name="text-embedding-3-small",
     )
 
     client = chromadb.PersistentClient(path=CHROMA_DIR)

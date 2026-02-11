@@ -20,8 +20,9 @@ def get_collection():
     """Get or initialize the ChromaDB collection."""
     global _collection
     if _collection is None:
-        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
+        ef = embedding_functions.OpenAIEmbeddingFunction(
+            api_key=os.environ.get("OPENAI_API_KEY"),
+            model_name="text-embedding-3-small",
         )
         client = chromadb.PersistentClient(path=CHROMA_DIR)
         _collection = client.get_collection(
