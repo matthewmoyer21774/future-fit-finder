@@ -1,42 +1,33 @@
 
 
-# Simplify: Remove Vector DB, Pass All Programmes Directly to GPT
+# Fix: Inconsistent CV Upload Failures
 
-## Why
+## Root Cause
 
-The vector database (ChromaDB + OpenAI embeddings) exists to narrow 62 programmes down to ~15 before sending them to GPT-4o-mini. But 62 short programme summaries fit easily in GPT's context window. The vector DB adds:
-- 2-5 minute startup delay (the "System is starting up" error)
-- ChromaDB dependency
-- Extra OpenAI embedding API calls and costs
-- The bug we've been debugging
+Two bugs work together to cause some PDFs to fail while others work:
 
-## What Changes
+1. **Missing MIME type in proxy**: The `backend-proxy` edge function creates a `Blob` without a MIME type (`new Blob([bytes])` on line 30). Without `application/pdf`, FastAPI may not properly receive the file upload for certain PDFs.
 
-| File | Change |
-|------|--------|
-| `backend/recommender.py` | Replace `search_programmes()` (ChromaDB query) with `load_all_programmes()` that reads the JSON files directly and passes all 62 to GPT |
-| `backend/main.py` | Remove the `build_db()` startup task and the `is_ready` guard — server is ready immediately |
-| `backend/build_vectordb.py` | Can be deleted entirely (or kept for future use) |
+2. **Silent parse failure**: When `pypdf` can't extract text from a PDF (due to PDF version differences, encoding, or embedded fonts), it returns an empty string. Since CV uploads don't send `career_goals`, the backend hits the validation check and returns "Please upload a CV or provide career goals."
 
-## Detail: recommender.py
+## Changes
 
-Replace the `get_collection()` and `search_programmes()` functions with a simple function that:
-1. Reads all programme JSON files from `programme_pages/`
-2. Builds a short summary for each (title, category, fee, format, location, description snippet)
-3. Passes ALL of them to GPT-4o-mini in the prompt
+### 1. `supabase/functions/backend-proxy/index.ts`
+- Add a helper function to map file extensions to MIME types (`.pdf` -> `application/pdf`, `.docx` -> `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, etc.)
+- Change line 30 from `new Blob([bytes])` to `new Blob([bytes], { type: getMimeType(file_name) })`
 
-The `recommend()` function stays mostly the same — it still builds the candidate profile context and calls GPT. The only change is where the programme list comes from (JSON files instead of ChromaDB).
+### 2. `backend/main.py`
+- After `parse_file()` returns, check if the file was uploaded but text extraction returned empty
+- If so, return a specific helpful error: "Could not extract text from your file. Please try a different format (PDF or DOCX) or use the manual form instead."
+- This replaces the confusing generic "Please upload a CV or provide career goals" message
 
-## Detail: main.py
+### 3. `src/pages/Index.tsx`
+- In the form tab's `else` branch (lines 66-74), after building the `parts` array, check if `parts.length === 0`
+- If empty, throw an error asking the user to fill in at least their job title or career goals
+- This prevents empty form submissions from reaching the backend
 
-- Remove the `startup()` event that builds the vector DB in a background thread
-- Remove the `is_ready` flag and the guard in `/recommend`
-- The server is ready to serve requests immediately on startup
+## Expected Result
+- PDFs that previously failed will now be properly received by the Python backend with the correct MIME type
+- When a file truly can't be parsed, users get a clear, helpful message instead of a confusing error
+- Empty form submissions are caught on the frontend before reaching the backend
 
-## Result
-
-- No more "System is starting up" errors
-- Instant Railway startup
-- One fewer dependency (ChromaDB)
-- Fewer OpenAI API calls (no embeddings)
-- Same recommendation quality — GPT handles 62 programmes easily
