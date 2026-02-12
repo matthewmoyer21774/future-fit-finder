@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { GraduationCap, Lock, ChevronDown, ChevronUp, Mail, User, Briefcase, Calendar, CheckCircle2, Database, Loader2 } from "lucide-react";
+import { GraduationCap, Lock, ChevronDown, ChevronUp, Mail, User, Briefcase, Calendar, CheckCircle2, Database, Loader2, BarChart3, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
 import rawProgrammeData from "../../programme_pages/programmes_database.json";
+import AdminAnalytics from "@/components/admin/AdminAnalytics";
 
 interface Submission {
   id: string;
@@ -41,6 +42,7 @@ const Admin = () => {
   const [seeding, setSeeding] = useState(false);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"submissions" | "analytics">("submissions");
 
   const handleLogin = async () => {
     setLoading(true);
@@ -143,6 +145,34 @@ const Admin = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8">
+        {/* Tab bar */}
+        <div className="mb-6 flex items-center gap-1 rounded-lg bg-muted p-1 w-fit">
+          <button
+            onClick={() => setActiveTab("submissions")}
+            className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "submissions"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <List className="h-4 w-4" /> Submissions ({submissions.length})
+          </button>
+          <button
+            onClick={() => setActiveTab("analytics")}
+            className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "analytics"
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <BarChart3 className="h-4 w-4" /> Analytics
+          </button>
+        </div>
+
+        {activeTab === "analytics" ? (
+          <AdminAnalytics submissions={submissions as any} />
+        ) : (
+        <>
         <h1 className="mb-2 text-2xl font-bold text-foreground">Submissions ({submissions.length})</h1>
         <p className="mb-6 text-muted-foreground">All lead submissions with recommendations and outreach emails.</p>
 
@@ -257,6 +287,8 @@ const Admin = () => {
             </TableBody>
           </Table>
         </div>
+        </>
+        )}
       </main>
     </div>
   );
