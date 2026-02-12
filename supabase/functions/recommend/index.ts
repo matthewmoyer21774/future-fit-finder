@@ -1,6 +1,42 @@
+/**
+ * RECOMMEND Edge Function
+ *
+ * PURPOSE:
+ *   Given a candidate's professional profile, this function loads the full
+ *   Vlerick programme catalogue from the database and uses GPT-5 (via the
+ *   Lovable AI Gateway) to select the TOP 3 best-fit programmes with
+ *   personalised reasoning and a draft outreach email.
+ *
+ * WHY GPT-5?
+ *   Programme recommendation requires nuanced reasoning: matching a candidate's
+ *   career stage, industry, goals, and seniority to the right programme.
+ *   GPT-5 provides the strongest reasoning capabilities available, producing
+ *   higher-quality, more personalised recommendations than smaller models.
+ *
+ * FUNCTION CALLING (tool_choice):
+ *   We use OpenAI's function calling (tools API) with `tool_choice` set to
+ *   force the "provide_recommendations" function.  This guarantees the model
+ *   returns structured JSON matching our exact schema — no regex parsing or
+ *   markdown stripping needed.
+ *
+ * DATABASE-FIRST CATALOGUE LOADING:
+ *   The function first tries to load programmes from the Supabase `programmes`
+ *   table (seeded by the seed-programmes function).  If the database is empty
+ *   or unavailable, it falls back to a `catalogue` string sent in the request
+ *   body.  This dual approach ensures the function works both with and without
+ *   database connectivity.
+ *
+ * DATA FLOW:
+ *   Frontend  →  POST /recommend { profile, catalogue? }
+ *             →  Load programmes from DB (or fallback)
+ *             →  GPT-5 (function calling)
+ *             →  { recommendations: [...], outreachEmail: "..." }
+ */
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// CORS headers required for cross-origin requests from the frontend
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -8,11 +44,13 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
+    // Accept the candidate profile and an optional fallback catalogue string
     const { profile, catalogue: fallbackCatalogue } = await req.json();
 
     if (!profile) {
@@ -24,7 +62,13 @@ serve(async (req) => {
 
     let catalogue = "";
 
-    // Try loading from database first
+    // -----------------------------------------------------------------------
+    // STEP 1: Load programme catalogue from the database
+    // -----------------------------------------------------------------------
+    // We use the anon key (read-only) to query the programmes table.
+    // The query selects all fields needed to build a rich text catalogue
+    // that the LLM can reason over.
+    // -----------------------------------------------------------------------
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -34,6 +78,8 @@ serve(async (req) => {
       .select("title, category, description, url, fee, format, location, start_date, target_audience, why_this_programme, key_topics, full_text");
 
     if (!dbError && programmes && programmes.length > 0) {
+      // Build a structured text catalogue from database rows.
+      // Each programme is formatted as a labelled block for the LLM to parse.
       catalogue = programmes.map((p) => {
         const parts = [`PROGRAMME: ${p.title}`];
         if (p.category) parts.push(`Category: ${p.category}`);
@@ -49,20 +95,40 @@ serve(async (req) => {
       }).join("\n\n---\n\n");
       console.log(`Loaded ${programmes.length} programmes from database`);
     } else if (fallbackCatalogue) {
+      // Use the catalogue string provided in the request body as fallback
       catalogue = fallbackCatalogue;
       console.log("Using fallback catalogue from request");
     } else {
       throw new Error("No programme data available. Please seed the database or provide catalogue.");
     }
 
+    // The Lovable AI Gateway key — automatically provisioned for Cloud projects
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
+    // -----------------------------------------------------------------------
+    // STEP 2: Build the profile summary for the LLM
+    // -----------------------------------------------------------------------
+    // Convert the profile object to a human-readable key: value format,
+    // filtering out null/empty values for a cleaner prompt.
+    // -----------------------------------------------------------------------
     const profileSummary = Object.entries(profile)
       .filter(([_, v]) => v)
       .map(([k, v]) => `${k}: ${v}`)
       .join("\n");
 
+    // -----------------------------------------------------------------------
+    // SYSTEM PROMPT DESIGN
+    // -----------------------------------------------------------------------
+    // The system prompt:
+    //   1. Sets the role (Vlerick admissions consultant)
+    //   2. Injects the FULL programme catalogue directly into the prompt
+    //   3. Instructs the model to select TOP 3 programmes with reasoning
+    //   4. Requests a draft outreach email (150–200 words)
+    //
+    // Injecting the full catalogue into the system prompt ensures the model
+    // only recommends actual programmes (no hallucination).
+    // -----------------------------------------------------------------------
     const systemPrompt = `You are an expert Vlerick Business School admissions consultant. Your job is to recommend the best executive education programmes for professionals based on their profile.
 
 You have access to the complete Vlerick programme catalogue below. Analyze the candidate's profile carefully and select the TOP 3 programmes that best match their career stage, goals, industry, and interests.
@@ -74,6 +140,9 @@ Also generate a warm, professional outreach email draft (150-200 words) that a V
 PROGRAMME CATALOGUE:
 ${catalogue}`;
 
+    // -----------------------------------------------------------------------
+    // STEP 3: Call GPT-5 via the Lovable AI Gateway with function calling
+    // -----------------------------------------------------------------------
     const response = await fetch(
       "https://ai.gateway.lovable.dev/v1/chat/completions",
       {
@@ -83,7 +152,7 @@ ${catalogue}`;
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "openai/gpt-5",
+          model: "openai/gpt-5",  // GPT-5 for highest reasoning quality
           messages: [
             { role: "system", content: systemPrompt },
             {
@@ -91,6 +160,7 @@ ${catalogue}`;
               content: `Here is the candidate's professional profile:\n\n${profileSummary}\n\nPlease recommend the top 3 Vlerick programmes and draft an outreach email.`,
             },
           ],
+          // Define the structured output schema via function calling
           tools: [
             {
               type: "function",
@@ -130,6 +200,7 @@ ${catalogue}`;
               },
             },
           ],
+          // Force the model to use our function — guarantees structured output
           tool_choice: {
             type: "function",
             function: { name: "provide_recommendations" },
@@ -138,6 +209,9 @@ ${catalogue}`;
       }
     );
 
+    // -----------------------------------------------------------------------
+    // Handle error responses from the AI gateway
+    // -----------------------------------------------------------------------
     if (!response.ok) {
       const status = response.status;
       if (status === 429) {
@@ -157,16 +231,22 @@ ${catalogue}`;
       throw new Error(`AI gateway error: ${status}`);
     }
 
+    // -----------------------------------------------------------------------
+    // STEP 4: Parse the AI response
+    // -----------------------------------------------------------------------
     const data = await response.json();
     console.log("AI response structure:", JSON.stringify(data.choices?.[0]?.message, null, 2));
 
     const message = data.choices?.[0]?.message;
     let result;
 
+    // Primary path: function call response (structured JSON)
     const toolCall = message?.tool_calls?.[0];
     if (toolCall) {
       result = JSON.parse(toolCall.function.arguments);
     } else if (message?.content) {
+      // Fallback: some models may return JSON in content instead of tool_calls.
+      // We attempt to parse it, stripping markdown code fences if present.
       let content = message.content.trim();
       if (content.startsWith("```")) {
         content = content.split("```")[1];
@@ -182,6 +262,7 @@ ${catalogue}`;
       throw new Error("No recommendations returned from AI");
     }
 
+    // Validate the response structure
     if (!result.recommendations || !Array.isArray(result.recommendations)) {
       console.error("Invalid result structure:", JSON.stringify(result).substring(0, 500));
       throw new Error("No recommendations returned from AI");
