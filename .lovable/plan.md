@@ -1,55 +1,77 @@
 
 
-# Fix: Railway 500 Errors (Profiler + Retry Logic)
+# Upgrade: Embedding Classifier + GPT-5 Recommendations
 
-## What's Actually Happening
+## Change 1: Replace LLM Classifier with Embedding-Based Classification
 
-Railway IS connected and running -- the health check returns 200 OK. The "Connect the Railway backend" message appears because the `/recommend` endpoint returns a 500 error, so the frontend shows that fallback text.
+**File: `backend/classifier.py`** -- Full rewrite
 
-There are two separate failures in the Railway logs:
+Replace the current approach (asking GPT-4o-mini to score 12 categories 0.0-1.0) with a deterministic **cosine similarity** approach using `text-embedding-3-small`.
 
-1. **Profiler still calling the Lovable gateway** -- The latest fix to `profiler.py` (switching from the Lovable AI gateway to the OpenAI SDK) needs to be redeployed to Railway. The running container still has the old code.
-2. **Transient OpenAI 500 on embeddings** -- Even after the profiler fix lands, `classifier.py` can hit a transient OpenAI server error with no retry logic, which kills the entire pipeline.
+**How it works:**
+1. Define 100-200 example phrases mapped to each category (roughly 10-15 per category)
+2. On first call, embed all example phrases and average them per category to get 12 "category centroid" embeddings
+3. Embed the candidate text
+4. Compute cosine similarity between candidate embedding and each category centroid
+5. Return top-k categories sorted by similarity score
 
-## Plan
+**Example mappings (10-15 per category, ~150 total):**
 
-### Step 1: Confirm profiler.py is correct (already done)
+- **Accounting & Finance**: "financial reporting and analysis", "corporate finance strategy", "budgeting and forecasting", "risk management in banking", "investment portfolio management", "audit and compliance", "CFO leadership", "treasury management", "mergers and acquisitions valuation", "financial modelling", "capital markets", "cost accounting"
+- **Digital Transformation and AI**: "digital transformation strategy", "AI implementation in business", "machine learning for enterprise", "data-driven decision making", "technology leadership", "digital innovation", "automation and process optimization", "cloud migration strategy", "cybersecurity management", "digital product development", "tech startup scaling", "AI governance"
+- **Entrepreneurship**: "launching a startup", "venture capital fundraising", "business model innovation", "scaling a new venture", "entrepreneurial mindset", "lean startup methodology", "founder leadership", "growth hacking strategies", "building an MVP", "social entrepreneurship", "family business succession", "corporate entrepreneurship"
+- **General Management**: "executive leadership development", "general management skills", "cross-functional leadership", "business administration", "corporate governance", "organisational management", "executive MBA preparation", "senior management transition", "business strategy execution", "C-suite readiness", "multi-unit management", "international business management"
+- **Healthcare Management**: "hospital administration", "healthcare policy", "pharmaceutical management", "health system transformation", "clinical leadership", "patient care quality improvement", "health tech innovation", "medical device commercialisation", "public health strategy", "healthcare operations", "nursing leadership", "biotech management"
+- **Human Resource Management**: "talent acquisition strategy", "employee engagement", "compensation and benefits design", "HR digital transformation", "workforce planning", "diversity and inclusion programs", "organisational development", "HR analytics", "labour relations", "learning and development strategy", "employer branding", "succession planning"
+- **Innovation Management**: "product innovation strategy", "design thinking", "R&D management", "open innovation", "innovation culture building", "technology transfer", "creative problem solving", "disruptive innovation", "innovation portfolio management", "intrapreneurship", "commercialising research", "innovation ecosystems"
+- **Marketing & Sales**: "brand strategy and management", "digital marketing campaigns", "B2B sales leadership", "customer experience optimisation", "marketing analytics", "content marketing strategy", "sales team management", "go-to-market strategy", "consumer behaviour insights", "pricing strategy", "key account management", "omnichannel marketing"
+- **Operations & Supply Chain Management**: "supply chain optimisation", "lean manufacturing", "logistics management", "procurement strategy", "quality management systems", "operations excellence", "inventory management", "production planning", "global supply chain resilience", "warehouse automation", "Six Sigma", "demand forecasting"
+- **People Management & Leadership**: "team leadership development", "executive coaching skills", "conflict resolution", "performance management", "leadership communication", "change management", "emotional intelligence in leadership", "cross-cultural team management", "coaching and mentoring", "servant leadership", "leading remote teams", "stakeholder management"
+- **Strategy**: "corporate strategy development", "competitive analysis", "strategic planning", "market entry strategy", "business transformation", "strategic partnerships", "scenario planning", "portfolio strategy", "strategic decision making", "industry disruption analysis", "growth strategy", "strategic consulting"
+- **Sustainability**: "ESG strategy and reporting", "sustainable business models", "circular economy", "carbon footprint reduction", "corporate social responsibility", "sustainable supply chains", "green finance", "climate risk management", "sustainability leadership", "impact investing", "environmental compliance", "net zero strategy"
 
-The current code in `backend/profiler.py` already uses the OpenAI SDK with `gpt-4o-mini`. No code changes needed here.
+**Implementation details:**
+- Cache the category centroid embeddings in a module-level variable (computed once on first request)
+- Use `openai.embeddings.create(model="text-embedding-3-small", input=[...])` to get embeddings
+- Cosine similarity: `dot(a, b) / (norm(a) * norm(b))` using numpy or pure Python
+- Add `numpy` to `backend/requirements.txt`
 
-### Step 2: Add retry logic to `backend/classifier.py`
+## Change 2: Upgrade Recommendation Model to GPT-5
 
-Wrap the `_embed` function's OpenAI call in a retry loop (3 attempts, exponential backoff) so transient 500 errors don't crash the pipeline.
+**File: `supabase/functions/recommend/index.ts`**
 
-```text
-Changes:
-- Import time, random
-- Add retry loop (3 attempts) around client.embeddings.create()
-- Backoff delays: ~1s, ~3s, ~7s with jitter
-- Re-raise after all retries exhausted
+Change line 86 from:
+```
+model: "google/gemini-3-flash-preview",
+```
+to:
+```
+model: "openai/gpt-5",
 ```
 
-### Step 3: Add retry logic to `backend/recommender.py`
+This uses the Lovable AI gateway's GPT-5 access for superior reasoning over the full programme catalogue and higher-quality personalised outreach emails. No other changes needed -- same API format, same tool calling.
 
-Same pattern around the `client.chat.completions.create()` call to protect the recommendation/email generation step.
+## Change 3: Update Architecture Page Labels
 
-### Step 4: Add retry logic to `backend/profiler.py`
+**File: `src/pages/AdminArchitecture.tsx`**
 
-Same pattern around the profile extraction LLM call.
+- Update step 4 tech badge from `"GPT-4o-mini"` to `"text-embedding-3-small"`
+- Update step 4 description to `"Embedding-based cosine similarity against 150 category exemplars"`
+- Update step 6 tech badge from `"GPT-4o-mini"` to `"GPT-5"`
+- Update step 6 description to reference GPT-5
 
-### Step 5: Redeploy to Railway
+## Change 4: Add numpy dependency
 
-After code changes, you'll need to push to your Railway-connected Git repo (or trigger a manual redeploy) so the container picks up all the fixes.
+**File: `backend/requirements.txt`**
 
-## Files Changed
+Add `numpy` to the requirements list for cosine similarity computation.
 
-| File | Change |
-|------|--------|
-| `backend/classifier.py` | Retry with backoff on `_embed()` |
-| `backend/recommender.py` | Retry with backoff on LLM call |
-| `backend/profiler.py` | Retry with backoff on LLM call |
+## Summary of Changes
 
-## Why the Frontend Says "Connect Railway"
-
-The frontend checks if `liveResults?.recommendations?.length > 0`. When the backend returns a 500, there are no recommendations, so the fallback message displays. Once the backend stops erroring, this message will automatically be replaced with the live results.
+| File | What Changes |
+|------|-------------|
+| `backend/classifier.py` | Full rewrite: 150 example phrases, embedding centroids, cosine similarity |
+| `backend/requirements.txt` | Add `numpy` |
+| `supabase/functions/recommend/index.ts` | Change model to `openai/gpt-5` |
+| `src/pages/AdminArchitecture.tsx` | Update tech badges and descriptions for steps 4 and 6 |
 

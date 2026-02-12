@@ -4,8 +4,6 @@ Uses OpenAI text-embedding-3-small embeddings with cosine similarity against cat
 """
 
 import os
-import time
-import random
 from openai import OpenAI
 import numpy as np
 
@@ -189,19 +187,10 @@ def _get_client() -> OpenAI:
     return OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
-def _embed(client: OpenAI, texts: list[str], max_retries: int = 3) -> list[np.ndarray]:
-    """Embed a list of texts using text-embedding-3-small with retry logic."""
-    for attempt in range(max_retries):
-        try:
-            response = client.embeddings.create(model="text-embedding-3-small", input=texts)
-            return [np.array(d.embedding, dtype=np.float32) for d in response.data]
-        except Exception as e:
-            if attempt < max_retries - 1:
-                delay = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Embedding attempt {attempt + 1} failed: {e}. Retrying in {delay:.1f}s...")
-                time.sleep(delay)
-            else:
-                raise
+def _embed(client: OpenAI, texts: list[str]) -> list[np.ndarray]:
+    """Embed a list of texts using text-embedding-3-small."""
+    response = client.embeddings.create(model="text-embedding-3-small", input=texts)
+    return [np.array(d.embedding, dtype=np.float32) for d in response.data]
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:

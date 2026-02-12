@@ -1,12 +1,10 @@
 """
 LLM-based profile extraction from CV/resume text.
-Uses GPT-5 Nano via the Lovable AI gateway for fast structured extraction.
+Uses OpenAI GPT-4o-mini to extract structured candidate information.
 """
 
 import json
 import os
-import time
-import random
 from openai import OpenAI
 
 SYSTEM_PROMPT = """You are an expert HR analyst. Given a candidate's CV/resume text and their stated career goals, extract a structured profile.
@@ -28,39 +26,24 @@ If a field cannot be determined, use null. For skills, list the top 5-8 most rel
 
 def extract_profile(cv_text: str, career_goals: str = "") -> dict:
     """
-    Extract a structured profile from CV text using GPT-4o-mini via OpenAI API.
+    Extract a structured profile from CV text using GPT-4o-mini.
     Returns a dict with candidate profile fields.
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("No OPENAI_API_KEY configured")
-
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
     user_message = f"CV/Resume:\n{cv_text[:6000]}"
     if career_goals:
         user_message += f"\n\nStated career goals:\n{career_goals}"
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message},
-                ],
-                temperature=0.1,
-                max_tokens=500,
-            )
-            break
-        except Exception as e:
-            if attempt < max_retries - 1:
-                delay = (2 ** attempt) + random.uniform(0, 1)
-                print(f"Profiler attempt {attempt + 1} failed: {e}. Retrying in {delay:.1f}s...")
-                time.sleep(delay)
-            else:
-                raise
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.1,
+        max_tokens=500,
+    )
 
     content = response.choices[0].message.content.strip()
 

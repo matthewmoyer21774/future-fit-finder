@@ -72,7 +72,7 @@ const pipelineNodes: PipelineNode[] = [
     step: 3,
     label: "Profile Extraction",
     tech: "GPT-4o-mini",
-    description: "GPT-4o-mini extracts structured profile: name, role, industry, skills, career goals",
+    description: "LLM extracts structured profile: name, role, industry, skills, career goals",
     icon: <Brain className="h-5 w-5" />,
     sampleOutput: '{ name: "Jane Doe", current_role: "Senior Marketing Manager", industry: "FMCG", skills: ["brand strategy", "digital marketing"] }',
     duration: 2000,
