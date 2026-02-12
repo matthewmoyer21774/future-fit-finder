@@ -130,6 +130,9 @@ const Admin = () => {
             <Link to="/admin/architecture">
               <Button variant="outline" size="sm">🔬 Architecture</Button>
             </Link>
+            <Link to="/admin/codebase">
+              <Button variant="outline" size="sm">📖 Codebase</Button>
+            </Link>
             <Link to="/">
               <Button variant="outline" size="sm">Back to Home</Button>
             </Link>
