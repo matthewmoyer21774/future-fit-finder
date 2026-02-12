@@ -2,14 +2,13 @@
 FastAPI backend for the Vlerick Programme Recommendation Tool.
 Endpoints:
   POST /recommend  - Upload CV + career goals → get recommendations + email
-  GET  /programmes - List all 61 programmes with metadata
+  GET  /programmes - List all programmes with metadata
   GET  /health     - Health check
 """
 
 import json
 import os
 import glob
-import threading
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,9 +16,6 @@ from parsers import parse_file, parse_linkedin_url
 from profiler import extract_profile
 from classifier import classify_goals
 from recommender import recommend
-from build_vectordb import main as build_db
-
-is_ready = False
 
 app = FastAPI(
     title="Vlerick Programme Recommender",
@@ -39,27 +35,14 @@ app.add_middleware(
 PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
 
 
-@app.on_event("startup")
-def startup():
-    def build():
-        global is_ready
-        try:
-            build_db()
-            is_ready = True
-            print("Vector DB ready!")
-        except Exception as e:
-            print(f"Vector DB build failed: {e}")
-    threading.Thread(target=build, daemon=True).start()
-
-
 @app.get("/health")
 def health():
-    return {"status": "ok", "ready": is_ready}
+    return {"status": "ok", "ready": True}
 
 
 @app.get("/programmes")
 def list_programmes():
-    """Return metadata for all 61 programmes."""
+    """Return metadata for all programmes."""
     programmes = []
     json_files = glob.glob(
         os.path.join(PROGRAMME_PAGES_DIR, "**", "*.json"), recursive=True
@@ -68,6 +51,8 @@ def list_programmes():
     for path in json_files:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if not isinstance(data, dict):
+            continue
         if "error" in data:
             continue
         programmes.append({
@@ -95,14 +80,6 @@ async def get_recommendations(
     Upload a CV (PDF/DOCX/TXT) and/or provide career goals text.
     Returns top 3 programme recommendations and a personalised email draft.
     """
-    # Guard: vector DB still building
-    if not is_ready:
-        return {
-            "error": "System is starting up, please try again in a moment.",
-            "recommendations": [],
-            "email_draft": "",
-        }
-
     # Step 1: Parse input sources
     cv_text = ""
 
@@ -114,6 +91,13 @@ async def get_recommendations(
         linkedin_text = parse_linkedin_url(linkedin_url.strip())
         if linkedin_text:
             cv_text += "\n\n" + linkedin_text
+
+    if file and not cv_text:
+        return {
+            "error": "Could not extract text from your file. Please try a different format (PDF or DOCX) or use the manual form instead.",
+            "recommendations": [],
+            "email_draft": "",
+        }
 
     if not cv_text and not career_goals:
         return {
@@ -138,7 +122,7 @@ async def get_recommendations(
 
     categories = classify_goals(classify_input, top_k=3)
 
-    # Step 4: RAG search + LLM synthesis
+    # Step 4: LLM synthesis with all programmes
     result = recommend(profile, categories)
 
     return {
