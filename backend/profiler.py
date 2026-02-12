@@ -5,6 +5,8 @@ Uses GPT-5 Nano via the Lovable AI gateway for fast structured extraction.
 
 import json
 import os
+import time
+import random
 from openai import OpenAI
 
 SYSTEM_PROMPT = """You are an expert HR analyst. Given a candidate's CV/resume text and their stated career goals, extract a structured profile.
@@ -39,15 +41,26 @@ def extract_profile(cv_text: str, career_goals: str = "") -> dict:
     if career_goals:
         user_message += f"\n\nStated career goals:\n{career_goals}"
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0.1,
-        max_tokens=500,
-    )
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.1,
+                max_tokens=500,
+            )
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Profiler attempt {attempt + 1} failed: {e}. Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+            else:
+                raise
 
     content = response.choices[0].message.content.strip()
 
