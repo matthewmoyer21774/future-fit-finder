@@ -1,13 +1,40 @@
 """
 Embedding-based classification of candidate career goals into Vlerick programme categories.
 Uses OpenAI text-embedding-3-small embeddings with cosine similarity against category exemplars.
+
+HOW IT WORKS:
+  1. We define 12 Vlerick programme categories, each with ~12 "exemplar"
+     phrases that describe typical career goals/skills for that category.
+  2. On first call, we embed ALL 144 exemplar phrases (12 categories x 12
+     phrases) into vectors using OpenAI's text-embedding-3-small model.
+  3. For each category, we average its 12 exemplar vectors to get a single
+     "centroid" vector — this represents the category's meaning in embedding
+     space.
+  4. When a candidate's text comes in, we embed it into the same space and
+     compute cosine similarity against each category centroid.
+  5. We return the top-k categories sorted by similarity score.
+
+WHY THIS APPROACH?
+  - More nuanced than keyword matching — captures semantic meaning.
+  - The exemplar phrases act as "training examples" that define each
+    category's semantic region without needing labelled data.
+  - Centroids are cached after first computation, so subsequent calls
+    only need to embed the candidate text (1 API call).
+  - Uses OpenAI's text-embedding-3-small model which is fast and cheap.
+
+This module is called by main.py (Step 3) to determine which programme
+categories best match the candidate before the recommendation step.
 """
 
 import os
 from openai import OpenAI
 import numpy as np
 
-# The 12 Vlerick executive education categories with exemplar phrases
+# ── The 12 Vlerick executive education categories ───────────────────
+# Each category has 12 exemplar phrases that represent typical career
+# goals, skills, or interests for someone who would benefit from
+# programmes in that area. These are embedded and averaged into
+# "centroid" vectors for classification.
 CATEGORY_EXEMPLARS: dict[str, list[str]] = {
     "Accounting & Finance": [
         "financial reporting and analysis",
@@ -179,22 +206,48 @@ CATEGORY_EXEMPLARS: dict[str, list[str]] = {
     ],
 }
 
-# Module-level cache for category centroid embeddings
+# ── Module-level cache ──────────────────────────────────────────────
+# Once we embed all 144 exemplar phrases and compute the 12 centroids,
+# we cache them here so we only pay for that API call once per server
+# lifetime. Subsequent classify_goals() calls reuse these centroids.
 _category_centroids: dict[str, np.ndarray] | None = None
 
 
 def _get_client() -> OpenAI:
+    """Create an OpenAI client using the OPENAI_API_KEY env var."""
     return OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
 def _embed(client: OpenAI, texts: list[str]) -> list[np.ndarray]:
-    """Embed a list of texts using text-embedding-3-small."""
+    """
+    Embed a list of text strings into vectors using OpenAI's API.
+
+    Uses the text-embedding-3-small model which produces 1536-dimensional
+    vectors. This is OpenAI's fastest/cheapest embedding model.
+
+    Args:
+        client : an initialised OpenAI client
+        texts  : list of strings to embed
+
+    Returns:
+        List of numpy arrays, one per input text.
+    """
     response = client.embeddings.create(model="text-embedding-3-small", input=texts)
     return [np.array(d.embedding, dtype=np.float32) for d in response.data]
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Compute cosine similarity between two vectors."""
+    """
+    Compute cosine similarity between two vectors.
+
+    Cosine similarity measures how similar two vectors are in direction
+    (ignoring magnitude). Returns a value between -1 and 1, where:
+      1.0  = identical direction (perfect match)
+      0.0  = orthogonal (no relationship)
+     -1.0  = opposite direction
+
+    Handles zero vectors gracefully by returning 0.0.
+    """
     dot = np.dot(a, b)
     norm_a = np.linalg.norm(a)
     norm_b = np.linalg.norm(b)
@@ -204,14 +257,34 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _build_centroids(client: OpenAI) -> dict[str, np.ndarray]:
-    """Embed all exemplar phrases and compute mean centroid per category."""
+    """
+    Embed all exemplar phrases and compute the mean centroid per category.
+
+    How it works:
+      1. Flatten all 144 exemplar phrases into a single list.
+      2. Embed them all in ONE API call (efficient — stays under limits).
+      3. Group the resulting vectors by category.
+      4. Average (mean) each group to get a single centroid vector per category.
+
+    The centroid represents the "semantic centre" of each category —
+    candidate text that is close to a centroid in embedding space is
+    a good fit for that category.
+
+    Results are cached in _category_centroids after first computation.
+
+    Args:
+        client : an initialised OpenAI client
+
+    Returns:
+        Dict mapping category name → centroid numpy array.
+    """
     global _category_centroids
     if _category_centroids is not None:
         return _category_centroids
 
-    # Flatten all exemplars and track which category each belongs to
+    # Flatten all exemplars into one list, tracking which category each belongs to
     all_phrases: list[str] = []
-    category_indices: list[tuple[str, int, int]] = []  # (category, start, end)
+    category_indices: list[tuple[str, int, int]] = []  # (category_name, start_idx, end_idx)
 
     for category, phrases in CATEGORY_EXEMPLARS.items():
         start = len(all_phrases)
@@ -219,10 +292,10 @@ def _build_centroids(client: OpenAI) -> dict[str, np.ndarray]:
         end = len(all_phrases)
         category_indices.append((category, start, end))
 
-    # Embed all phrases in one API call (144 phrases fits easily)
+    # Embed all 144 phrases in one API call (well within rate limits)
     all_embeddings = _embed(client, all_phrases)
 
-    # Compute centroid per category
+    # Compute centroid (mean vector) for each category
     centroids: dict[str, np.ndarray] = {}
     for category, start, end in category_indices:
         category_embeddings = np.array(all_embeddings[start:end])
@@ -234,30 +307,41 @@ def _build_centroids(client: OpenAI) -> dict[str, np.ndarray]:
 
 def classify_goals(text: str, top_k: int = 3) -> list[dict]:
     """
-    Classify career goals/profile text against the 12 Vlerick categories
-    using embedding cosine similarity.
+    Classify a candidate's career goals/profile text against the 12 Vlerick categories.
+
+    Pipeline:
+      1. Build (or retrieve cached) category centroid embeddings.
+      2. Embed the candidate's text into the same vector space.
+      3. Compute cosine similarity between the candidate vector and each centroid.
+      4. Return the top-k categories sorted by similarity (highest first).
 
     Args:
-        text: The candidate's career goals, skills, and background combined.
-        top_k: Number of top categories to return.
+        text  : the candidate's career goals, skills, and background combined
+                into a single string.
+        top_k : how many top categories to return (default 3).
 
     Returns:
-        List of dicts with 'category' and 'score', sorted by score descending.
+        List of dicts sorted by score descending, e.g.:
+        [
+            {"category": "Strategy",           "score": 0.8521},
+            {"category": "General Management", "score": 0.7103},
+            {"category": "Marketing & Sales",  "score": 0.5890},
+        ]
     """
     client = _get_client()
 
-    # Build or retrieve cached centroids
+    # Build or retrieve cached centroid vectors for all 12 categories
     centroids = _build_centroids(client)
 
-    # Embed the candidate text
+    # Embed the candidate text into the same vector space
     candidate_embedding = _embed(client, [text])[0]
 
-    # Score against each category centroid
+    # Score the candidate against each category centroid
     scores = []
     for category, centroid in centroids.items():
         similarity = _cosine_similarity(candidate_embedding, centroid)
         scores.append({"category": category, "score": round(similarity, 4)})
 
-    # Sort by score descending
+    # Sort by score descending and return the top-k
     scores.sort(key=lambda x: x["score"], reverse=True)
     return scores[:top_k]
