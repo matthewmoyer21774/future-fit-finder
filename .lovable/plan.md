@@ -1,44 +1,55 @@
 
 
-# Fix: Profiler 401 Error on Railway
+# Fix: Railway 500 Errors (Profiler + Retry Logic)
 
-## Problem
+## What's Actually Happening
 
-The `profiler.py` was updated to call the **Lovable AI gateway** (`ai.gateway.lovable.dev`) using `LOVABLE_API_KEY`. However, the Railway backend runs outside Lovable Cloud and does not have access to that key. This causes a **401 Unauthorized** error on every `/recommend` request.
+Railway IS connected and running -- the health check returns 200 OK. The "Connect the Railway backend" message appears because the `/recommend` endpoint returns a 500 error, so the frontend shows that fallback text.
 
-The classifier already works correctly because it uses the OpenAI SDK directly with `OPENAI_API_KEY`.
+There are two separate failures in the Railway logs:
 
-## Solution
+1. **Profiler still calling the Lovable gateway** -- The latest fix to `profiler.py` (switching from the Lovable AI gateway to the OpenAI SDK) needs to be redeployed to Railway. The running container still has the old code.
+2. **Transient OpenAI 500 on embeddings** -- Even after the profiler fix lands, `classifier.py` can hit a transient OpenAI server error with no retry logic, which kills the entire pipeline.
 
-Revert `profiler.py` to use the **OpenAI SDK directly** (same pattern as `classifier.py`), calling `gpt-4o-mini` via the standard OpenAI API. This is the model your `OPENAI_API_KEY` on Railway has access to.
+## Plan
 
-## File Changes
+### Step 1: Confirm profiler.py is correct (already done)
 
-### `backend/profiler.py`
+The current code in `backend/profiler.py` already uses the OpenAI SDK with `gpt-4o-mini`. No code changes needed here.
 
-- Remove the `requests`-based call to `ai.gateway.lovable.dev`
-- Use the `OpenAI` SDK client (already imported) with `OPENAI_API_KEY`
-- Call `gpt-4o-mini` (available on standard OpenAI keys)
-- Keep the same system prompt, JSON parsing, and error handling
+### Step 2: Add retry logic to `backend/classifier.py`
 
-The key change is replacing:
-```python
-response = requests.post("https://ai.gateway.lovable.dev/v1/chat/completions", ...)
+Wrap the `_embed` function's OpenAI call in a retry loop (3 attempts, exponential backoff) so transient 500 errors don't crash the pipeline.
+
+```text
+Changes:
+- Import time, random
+- Add retry loop (3 attempts) around client.embeddings.create()
+- Backoff delays: ~1s, ~3s, ~7s with jitter
+- Re-raise after all retries exhausted
 ```
 
-With:
-```python
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-response = client.chat.completions.create(model="gpt-4o-mini", ...)
-```
+### Step 3: Add retry logic to `backend/recommender.py`
 
-### `src/pages/AdminArchitecture.tsx`
+Same pattern around the `client.chat.completions.create()` call to protect the recommendation/email generation step.
 
-- Update Step 3 tech badge back to `"GPT-4o-mini"` and description to clarify it runs on the Railway backend via standard OpenAI API
+### Step 4: Add retry logic to `backend/profiler.py`
 
-## Why GPT-5 Nano stays for edge functions only
+Same pattern around the profile extraction LLM call.
 
-The Lovable AI gateway (and models like `openai/gpt-5-nano`, `openai/gpt-5`) are only accessible from Lovable Cloud edge functions where `LOVABLE_API_KEY` is automatically available. The Railway backend must use models accessible through a standard OpenAI API key.
+### Step 5: Redeploy to Railway
 
-The recommendation engine in `supabase/functions/recommend/index.ts` correctly uses `openai/gpt-5` via the gateway since it runs as an edge function inside Lovable Cloud.
+After code changes, you'll need to push to your Railway-connected Git repo (or trigger a manual redeploy) so the container picks up all the fixes.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `backend/classifier.py` | Retry with backoff on `_embed()` |
+| `backend/recommender.py` | Retry with backoff on LLM call |
+| `backend/profiler.py` | Retry with backoff on LLM call |
+
+## Why the Frontend Says "Connect Railway"
+
+The frontend checks if `liveResults?.recommendations?.length > 0`. When the backend returns a 500, there are no recommendations, so the fallback message displays. Once the backend stops erroring, this message will automatically be replaced with the live results.
 
