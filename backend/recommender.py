@@ -1,119 +1,82 @@
 """
-Programme recommender + personalised email generator.
-
-PURPOSE:
-    Given a structured candidate profile (from profiler.py) and the top
-    interest-area categories (from classifier.py), this module:
-      1. Loads the FULL catalogue of Vlerick programmes from scraped JSON files.
-      2. Sends everything to GPT-4o-mini to select the TOP 3 best-fit programmes.
-      3. Returns personalised reasoning for each pick and a draft outreach email.
-
-WHY GPT-4o-mini?
-    This is the Python-backend recommender (used when running the FastAPI server
-    locally).  GPT-4o-mini provides strong reasoning at low cost.  The edge-
-    function version (supabase/functions/recommend/index.ts) uses GPT-5 for
-    even higher quality.
-
-CACHING:
-    Programme JSON files are loaded from disk once and cached in the module-level
-    `_programmes_cache` list.  This avoids re-reading ~60 JSON files on every
-    request.
-
-DATA FLOW:
-    main.py  →  recommend(profile, categories)  →  returns {recommendations, email_draft}
-
-See: https://platform.openai.com/docs/guides/chat-completions
+RAG-based programme recommender + personalised email generator.
+Combines ChromaDB vector search with GPT-4o-mini synthesis.
 """
 
 import json
 import os
-import glob
+import chromadb
+from chromadb.utils import embedding_functions
 from openai import OpenAI
 
-# Directory containing the scraped programme JSON files (one file per programme)
-PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
+CHROMA_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
+COLLECTION_NAME = "vlerick_programmes"
 
-# Module-level cache: loaded once, reused across requests
-_programmes_cache = None
+# Lazy-loaded resources
+_collection = None
 
 
-def load_all_programmes() -> list[dict]:
+def get_collection():
+    """Get or initialize the ChromaDB collection."""
+    global _collection
+    if _collection is None:
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if api_key and not os.environ.get("CHROMA_OPENAI_API_KEY"):
+            os.environ["CHROMA_OPENAI_API_KEY"] = api_key
+        ef = embedding_functions.OpenAIEmbeddingFunction(
+            api_key=api_key,
+            model_name="text-embedding-3-small",
+        )
+        client = chromadb.PersistentClient(path=CHROMA_DIR)
+        _collection = client.get_collection(
+            name=COLLECTION_NAME,
+            embedding_function=ef,
+        )
+    return _collection
+
+
+def search_programmes(query: str, n_results: int = 10) -> list[dict]:
     """
-    Load all programme JSON files from the scraped data directory and return
-    a list of summary dicts (one per programme).
-
-    Each summary contains:
-        - title, url, category (extracted from the URL slug)
-        - fee, format, location, start_date (from key_facts)
-        - description_snippet (first 400 chars of the description)
-
-    The results are cached at module level so subsequent calls are free.
+    Search the vector store for programmes matching the query.
+    Returns deduplicated programme results with metadata.
     """
-    global _programmes_cache
-    if _programmes_cache is not None:
-        return _programmes_cache
+    collection = get_collection()
 
-    programmes = []
-    # Recursively find all .json files under programme_pages/
-    json_files = glob.glob(
-        os.path.join(PROGRAMME_PAGES_DIR, "**", "*.json"), recursive=True
+    results = collection.query(
+        query_texts=[query],
+        n_results=n_results,
+        include=["documents", "metadatas", "distances"],
     )
 
-    for path in json_files:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Skip non-dict entries and files that had scraping errors
-        if not isinstance(data, dict):
-            continue
-        if "error" in data:
-            continue
+    # Deduplicate by programme title
+    seen_titles = set()
+    programmes = []
+    for doc, meta, dist in zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["distances"][0],
+    ):
+        title = meta.get("title", "")
+        if title and title not in seen_titles:
+            seen_titles.add(title)
+            programmes.append({
+                "title": title,
+                "url": meta.get("url", ""),
+                "category": meta.get("category", ""),
+                "fee": meta.get("fee", ""),
+                "format": meta.get("format", ""),
+                "location": meta.get("location", ""),
+                "start_date": meta.get("start_date", ""),
+                "relevance_score": round(1 - dist, 4),
+                "description_snippet": doc[:500],
+            })
 
-        # ---------------------------------------------------------------
-        # Extract the category from the URL slug.
-        # URLs follow the pattern:
-        #   .../programmes/programmes-in-<category-slug>/<programme-name>/
-        # We split on the slug, then convert "digital-transformation-and-ai"
-        # to "Digital Transformation And Ai" via .replace("-", " ").title().
-        # ---------------------------------------------------------------
-        url = data.get("url", "")
-        category = ""
-        if "/programmes/programmes-in-" in url:
-            cat_part = url.split("/programmes/programmes-in-")[1].split("/")[0]
-            category = cat_part.replace("-", " ").title()
-
-        kf = data.get("key_facts", {})
-        description = data.get("description", "")
-
-        programmes.append({
-            "title": data.get("title", "").strip(),
-            "url": url,
-            "category": category,
-            "fee": kf.get("fee", ""),
-            "format": kf.get("format", ""),
-            "location": kf.get("location", ""),
-            "start_date": kf.get("start_date", ""),
-            "description_snippet": description[:400],  # First 400 chars for context
-        })
-
-    _programmes_cache = programmes
     return programmes
 
 
-# ---------------------------------------------------------------------------
-# SYSTEM PROMPT
-# ---------------------------------------------------------------------------
-# The prompt instructs the LLM to act as a Vlerick admissions consultant.
-# It asks for:
-#   - TOP 3 programme picks with 2-3 sentence reasoning each
-#   - A warm outreach email (3-4 paragraphs) referencing the candidate's
-#     background, goals, and the recommended programmes
-#   - Output as *valid JSON only* — no markdown, no extra text
-#
-# The strict JSON-only instruction helps with automated parsing downstream.
-# ---------------------------------------------------------------------------
 RECOMMEND_PROMPT = """You are an admissions consultant at Vlerick Business School.
 
-Given this candidate's profile and the FULL list of available programmes, select the TOP 3 best programmes for this person. For each, explain in 2-3 sentences WHY it fits their background and goals.
+Given this candidate's profile and a list of matching programmes, select the TOP 3 best programmes for this person. For each, explain in 2-3 sentences WHY it fits their background and goals.
 
 Then write a warm, personalised outreach email (3-4 paragraphs) that:
 - Addresses the candidate by name
@@ -140,66 +103,59 @@ Return ONLY valid JSON:
 
 def recommend(profile: dict, categories: list[dict]) -> dict:
     """
-    Generate programme recommendations and a personalised outreach email.
-
-    This function constructs a large prompt containing:
-        - The candidate's full structured profile (from profiler.py)
-        - Their top 3 interest-area categories with scores (from classifier.py)
-        - The FULL programme catalogue (~60 programmes with metadata)
-
-    It then sends everything to GPT-4o-mini for synthesis.
+    Generate programme recommendations and a personalised email.
 
     Args:
-        profile:    Structured candidate profile dict from profiler.py.
-        categories: Top zero-shot classification results from classifier.py,
-                    each with 'category' and 'score' keys.
+        profile: Structured candidate profile from profiler.py
+        categories: Top zero-shot categories from classifier.py
 
     Returns:
-        Dict with:
-            'recommendations': list of 3 dicts (title, url, category, fee,
-                               format, location, reason)
-            'email_draft':     str — full personalised email text
+        Dict with 'recommendations' list and 'email_draft' string.
     """
-    # Load the full programme catalogue (cached after first call)
-    all_programmes = load_all_programmes()
+    # Build search query from profile + top categories
+    query_parts = []
+    if profile.get("career_goals"):
+        query_parts.append(profile["career_goals"])
+    if profile.get("current_role"):
+        query_parts.append(f"Current role: {profile['current_role']}")
+    if profile.get("industry"):
+        query_parts.append(f"Industry: {profile['industry']}")
+    if profile.get("skills"):
+        query_parts.append(f"Skills: {', '.join(profile['skills'][:5])}")
+    for cat in categories[:3]:
+        query_parts.append(cat["category"])
 
-    if not all_programmes:
+    search_query = " | ".join(query_parts)
+
+    # RAG search
+    matches = search_programmes(search_query, n_results=15)
+
+    if not matches:
         return {
             "recommendations": [],
-            "email_draft": "No programmes available.",
+            "email_draft": "No matching programmes found.",
         }
 
-    # -----------------------------------------------------------------------
-    # Build the user message that provides all context to the LLM
-    # -----------------------------------------------------------------------
-    # We include:
-    #   1. The candidate's profile as formatted JSON
-    #   2. Their top interest areas with confidence scores
-    #   3. Every programme with key metadata (title, category, fee, etc.)
-    # This "catalogue injection" approach ensures the LLM can pick from the
-    # full list rather than hallucinating programme names.
-    # -----------------------------------------------------------------------
+    # Build context for LLM
     candidate_summary = json.dumps(profile, indent=2)
     category_summary = ", ".join(
         f"{c['category']} ({c['score']:.0%})" for c in categories[:3]
     )
     programme_list = "\n\n".join(
-        f"- {p['title']} ({p['category']})\n"
-        f"  Fee: {p['fee']} | Format: {p['format']} | Location: {p['location']}\n"
-        f"  URL: {p['url']}\n"
-        f"  {p['description_snippet'][:300]}"  # Truncate to keep prompt manageable
-        for p in all_programmes
+        f"- {m['title']} ({m['category']})\n"
+        f"  Fee: {m['fee']} | Format: {m['format']} | Location: {m['location']}\n"
+        f"  URL: {m['url']}\n"
+        f"  {m['description_snippet'][:300]}"
+        for m in matches[:8]
     )
 
     user_message = (
         f"CANDIDATE PROFILE:\n{candidate_summary}\n\n"
         f"TOP INTEREST AREAS: {category_summary}\n\n"
-        f"ALL AVAILABLE PROGRAMMES ({len(all_programmes)} total):\n{programme_list}"
+        f"MATCHING PROGRAMMES:\n{programme_list}"
     )
 
-    # -----------------------------------------------------------------------
-    # LLM call — GPT-4o-mini for fast, cost-effective synthesis
-    # -----------------------------------------------------------------------
+    # LLM synthesis
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
     response = client.chat.completions.create(
@@ -208,18 +164,13 @@ def recommend(profile: dict, categories: list[dict]) -> dict:
             {"role": "system", "content": RECOMMEND_PROMPT},
             {"role": "user", "content": user_message},
         ],
-        temperature=0.7,    # Moderate creativity for personalised writing
-        max_tokens=1500,    # Enough for 3 recommendations + email draft
+        temperature=0.7,
+        max_tokens=1500,
     )
 
     content = response.choices[0].message.content.strip()
 
-    # -----------------------------------------------------------------------
-    # Parse the JSON response
-    # -----------------------------------------------------------------------
-    # The model is instructed to return *only* JSON, but it sometimes wraps
-    # the output in markdown code fences (```json ... ```).  We strip those.
-    # -----------------------------------------------------------------------
+    # Parse JSON response
     if content.startswith("```"):
         content = content.split("```")[1]
         if content.startswith("json"):
@@ -228,26 +179,21 @@ def recommend(profile: dict, categories: list[dict]) -> dict:
     try:
         result = json.loads(content)
     except json.JSONDecodeError:
-        # ---------------------------------------------------------------
-        # Fallback: if the LLM did not return valid JSON, we construct a
-        # basic recommendation set from the first 3 programmes and use
-        # the raw LLM text as the email draft.  This ensures the pipeline
-        # never returns an empty result.
-        # ---------------------------------------------------------------
+        # Fallback: return raw matches without LLM synthesis
         result = {
             "recommendations": [
                 {
-                    "title": p["title"],
-                    "url": p["url"],
-                    "category": p["category"],
-                    "fee": p["fee"],
-                    "format": p["format"],
-                    "location": p["location"],
-                    "reason": f"Matched based on your interest in {p['category']}.",
+                    "title": m["title"],
+                    "url": m["url"],
+                    "category": m["category"],
+                    "fee": m["fee"],
+                    "format": m["format"],
+                    "location": m["location"],
+                    "reason": f"Matched based on your interest in {m['category']}.",
                 }
-                for p in all_programmes[:3]
+                for m in matches[:3]
             ],
-            "email_draft": content,  # Use raw LLM output as-is
+            "email_draft": content,
         }
 
     return result

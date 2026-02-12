@@ -1,17 +1,15 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { GraduationCap, Lock, Database, Loader2 } from "lucide-react";
+import { GraduationCap, Lock, ChevronDown, ChevronUp, Mail, User, Briefcase, Calendar, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Link } from "react-router-dom";
-import rawProgrammeData from "../../programme_pages/programmes_database.json";
-import SubmissionsTable from "@/components/admin/SubmissionsTable";
-import AnalyticsTab from "@/components/admin/AnalyticsTab";
 
 interface Submission {
   id: string;
@@ -39,8 +37,8 @@ const Admin = () => {
   const [password, setPassword] = useState("");
   const [authenticated, setAuthenticated] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [seeding, setSeeding] = useState(false);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const handleLogin = async () => {
     setLoading(true);
@@ -50,10 +48,15 @@ const Admin = () => {
       });
       if (error) throw new Error(error.message);
       if (data.error) throw new Error(data.error);
+
       setSubmissions(data.submissions || []);
       setAuthenticated(true);
     } catch (e: any) {
-      toast({ title: "Access denied", description: e.message || "Invalid password", variant: "destructive" });
+      toast({
+        title: "Access denied",
+        description: e.message || "Invalid password",
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
@@ -106,32 +109,8 @@ const Admin = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={seeding}
-              onClick={async () => {
-                setSeeding(true);
-                try {
-                  const { data, error } = await supabase.functions.invoke("seed-programmes", {
-                    body: { programmes: rawProgrammeData, admin_password: password },
-                  });
-                  if (error) throw new Error(data?.error || error.message);
-                  toast({ title: "Database seeded", description: `${data.inserted} programmes inserted.` });
-                } catch (e: any) {
-                  toast({ title: "Seed failed", description: e.message, variant: "destructive" });
-                } finally {
-                  setSeeding(false);
-                }
-              }}
-            >
-              {seeding ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Seeding...</> : <><Database className="mr-2 h-4 w-4" /> Seed Programmes</>}
-            </Button>
             <Link to="/admin/architecture">
               <Button variant="outline" size="sm">🔬 Architecture</Button>
-            </Link>
-            <Link to="/admin/codebase">
-              <Button variant="outline" size="sm">📖 Codebase</Button>
             </Link>
             <Link to="/">
               <Button variant="outline" size="sm">Back to Home</Button>
@@ -141,21 +120,120 @@ const Admin = () => {
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        <Tabs defaultValue="submissions">
-          <TabsList className="mb-6">
-            <TabsTrigger value="submissions">Submissions ({submissions.length})</TabsTrigger>
-            <TabsTrigger value="analytics">Analytics</TabsTrigger>
-          </TabsList>
+        <h1 className="mb-2 text-2xl font-bold text-foreground">Submissions ({submissions.length})</h1>
+        <p className="mb-6 text-muted-foreground">All lead submissions with recommendations and outreach emails.</p>
 
-          <TabsContent value="submissions">
-            <p className="mb-4 text-muted-foreground">All lead submissions with recommendations and outreach emails.</p>
-            <SubmissionsTable submissions={submissions} />
-          </TabsContent>
+        <div className="rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Name</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Method</TableHead>
+                <TableHead>Job Title</TableHead>
+                <TableHead>Wants Info</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {submissions.map((sub) => {
+                const isExpanded = expandedId === sub.id;
+                const profile = sub.profile as Record<string, string> | null;
+                return (
+                  <>
+                    <TableRow
+                      key={sub.id}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => setExpandedId(isExpanded ? null : sub.id)}
+                    >
+                      <TableCell className="whitespace-nowrap text-sm">
+                        {new Date(sub.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                      </TableCell>
+                      <TableCell className="font-medium">{sub.name || "—"}</TableCell>
+                      <TableCell>{sub.email || "—"}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="capitalize">{sub.input_method}</Badge>
+                      </TableCell>
+                      <TableCell>{profile?.jobTitle || "—"}</TableCell>
+                      <TableCell>
+                        {sub.wants_info ? (
+                          <CheckCircle2 className="h-4 w-4 text-primary" />
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      </TableCell>
+                    </TableRow>
+                    {isExpanded && (
+                      <TableRow key={`${sub.id}-detail`}>
+                        <TableCell colSpan={7} className="bg-muted/30 p-6">
+                          <div className="grid gap-6 md:grid-cols-2">
+                            {/* Profile */}
+                            <div>
+                              <h3 className="mb-3 flex items-center gap-2 font-semibold text-foreground">
+                                <User className="h-4 w-4" /> Profile
+                              </h3>
+                              <div className="space-y-1 text-sm">
+                                {profile && Object.entries(profile).map(([k, v]) =>
+                                  v ? (
+                                    <div key={k}>
+                                      <span className="font-medium capitalize">{k.replace(/([A-Z])/g, " $1")}:</span>{" "}
+                                      <span className="text-muted-foreground">{v}</span>
+                                    </div>
+                                  ) : null
+                                )}
+                              </div>
+                            </div>
 
-          <TabsContent value="analytics">
-            <AnalyticsTab submissions={submissions} />
-          </TabsContent>
-        </Tabs>
+                            {/* Recommendations */}
+                            <div>
+                              <h3 className="mb-3 flex items-center gap-2 font-semibold text-foreground">
+                                <Briefcase className="h-4 w-4" /> Recommendations
+                              </h3>
+                              <div className="space-y-3">
+                                {sub.recommendations?.map((rec, i) => (
+                                  <div key={i} className="rounded-md border border-border bg-card p-3">
+                                    <div className="flex items-center justify-between">
+                                      <span className="font-medium text-sm">{rec.programmeTitle}</span>
+                                      <Badge variant="secondary" className="text-xs">{rec.category}</Badge>
+                                    </div>
+                                    <p className="mt-1 text-xs text-muted-foreground">{rec.reasoning}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Outreach Email */}
+                            {sub.outreach_email && (
+                              <div className="md:col-span-2">
+                                <h3 className="mb-3 flex items-center gap-2 font-semibold text-foreground">
+                                  <Mail className="h-4 w-4" /> Draft Outreach Email
+                                </h3>
+                                <pre className="whitespace-pre-wrap rounded-lg bg-card border border-border p-4 text-sm text-foreground font-sans leading-relaxed">
+                                  {sub.outreach_email}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </>
+                );
+              })}
+              {submissions.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                    No submissions yet.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </main>
     </div>
   );

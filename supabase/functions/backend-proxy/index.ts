@@ -6,17 +6,6 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-function getMimeType(fileName: string): string {
-  const ext = (fileName || "").split(".").pop()?.toLowerCase();
-  const mimeMap: Record<string, string> = {
-    pdf: "application/pdf",
-    doc: "application/msword",
-    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    txt: "text/plain",
-  };
-  return mimeMap[ext || ""] || "application/octet-stream";
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -38,7 +27,7 @@ serve(async (req) => {
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-      const blob = new Blob([bytes], { type: getMimeType(file_name) });
+      const blob = new Blob([bytes]);
       formData.append("file", blob, file_name);
     }
 
@@ -66,31 +55,10 @@ serve(async (req) => {
     if (!response.ok) {
       const errText = await response.text();
       console.error("Backend error:", response.status, errText);
-      // Try to parse JSON error from backend
-      try {
-        const errJson = JSON.parse(errText);
-        if (errJson.error) {
-          return new Response(
-            JSON.stringify({ error: errJson.error }),
-            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-      } catch (_) { /* not JSON */ }
-      return new Response(
-        JSON.stringify({ error: `Backend returned status ${response.status}` }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      throw new Error(`Backend error: ${response.status}`);
     }
 
     const data = await response.json();
-
-    // If the backend says it's still starting up, return error in 200 response
-    if (data.error) {
-      return new Response(
-        JSON.stringify({ error: data.error }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     // Map Python backend response to frontend format
     const recommendations = (data.recommendations || []).map((rec: Record<string, string>) => ({

@@ -1,22 +1,28 @@
 
 
-# Fix Railway 401 Error in profiler.py
+# Fix Railway 502: Background Vector DB Build
 
 ## Problem
-`profiler.py` sends the `OPENAI_API_KEY` to `ai.gateway.lovable.dev`, which only accepts Lovable-specific keys. The other two scripts (`classifier.py` and `recommender.py`) correctly call OpenAI directly using the OpenAI SDK.
+Railway returns "Application failed to respond" because `build_vectordb.py` runs before uvicorn starts. The OpenAI embedding calls for 62 programmes take 30-60 seconds, and Railway's health check times out waiting for the server.
 
-## Fix
-Update `profiler.py` to use the OpenAI Python SDK (already installed) to call `api.openai.com` directly, matching the pattern used by `classifier.py` and `recommender.py`.
+## Solution
+Start the web server immediately, build the vector DB in a background thread.
 
-## Technical Details
+### Changes
 
-### Modified File: `backend/profiler.py`
-- Replace the `requests.post()` call to `ai.gateway.lovable.dev` with `OpenAI().chat.completions.create()` using `openai/gpt-4o-mini` (or `gpt-5-nano` equivalent available via OpenAI directly)
-- Remove the `import requests` and `LOVABLE_API_KEY` logic
-- Use `os.environ.get("OPENAI_API_KEY")` only, matching `recommender.py`
-- Keep the same system prompt, temperature (0.1), and JSON parsing logic
+**1. `backend/main.py`** -- Background build + ready flag
+- Import `threading` and `build_vectordb.main`
+- Add a global `is_ready` flag (starts as `False`)
+- Add a `startup` event that spawns a background thread to run the vector DB build
+- Update `/health` to return `{"status": "ok", "ready": is_ready}`
+- Add a guard at the top of `/recommend` that returns a friendly "still loading" message if the DB isn't ready yet
 
-The model will change from `openai/gpt-5-nano` (Lovable gateway name) to `gpt-4o-mini` (OpenAI direct name), which is the closest equivalent available directly from OpenAI.
+**2. `backend/Procfile`** -- Remove the pre-build step
+- Change from: `python build_vectordb.py && uvicorn main:app --host 0.0.0.0 --port $PORT`
+- Change to: `web: uvicorn main:app --host 0.0.0.0 --port $PORT`
 
-No other files need changes. No frontend changes needed.
+**3. `backend/railway.json`** -- Match the start command
+- Update `startCommand` to: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+
+This way Railway sees a healthy server within seconds. The vector DB builds in the background (~30-60s). After redeploying, wait about a minute before testing the full recommendation flow.
 

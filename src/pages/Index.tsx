@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Upload, FileText, PenLine, ArrowRight, GraduationCap, Loader2, Mic, MicOff } from "lucide-react";
+import { Upload, FileText, PenLine, ArrowRight, GraduationCap, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -26,9 +26,7 @@ const Index = () => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("form");
   const [cvFile, setCvFile] = useState<File | null>(null);
-  const [voiceText, setVoiceText] = useState("");
-  const [isRecording, setIsRecording] = useState(false);
-  const [recognition, setRecognition] = useState<any>(null);
+  const [linkedinText, setLinkedinText] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [contactName, setContactName] = useState("");
@@ -49,66 +47,50 @@ const Index = () => {
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      // Build request body for backend-proxy → Python backend
-      const body: Record<string, string> = {};
+      let parsedName = contactName;
+      let parsedEmail = contactEmail;
+
+      // Build request body for the Railway Python backend proxy
+      const requestBody: Record<string, string> = {};
 
       if (activeTab === "cv" && cvFile) {
         setLoadingMessage("Uploading & analyzing your CV...");
+        // Convert file to base64
         const arrayBuffer = await cvFile.arrayBuffer();
         const bytes = new Uint8Array(arrayBuffer);
         let binary = "";
         for (let i = 0; i < bytes.length; i++) {
           binary += String.fromCharCode(bytes[i]);
         }
-        body.file_base64 = btoa(binary);
-        body.file_name = cvFile.name;
-      } else if (activeTab === "voice" && voiceText) {
-        setLoadingMessage("Analyzing your voice description...");
-        body.career_goals = voiceText;
+        requestBody.file_base64 = btoa(binary);
+        requestBody.file_name = cvFile.name;
+      } else if (activeTab === "linkedin" && linkedinText) {
+        requestBody.linkedin_text = linkedinText;
       } else {
-        setLoadingMessage("Analyzing your profile...");
+        // Form mode: combine fields into career_goals text
         const parts: string[] = [];
         if (formData.jobTitle) parts.push(`Current role: ${formData.jobTitle}`);
         if (formData.industry) parts.push(`Industry: ${formData.industry}`);
-        if (formData.yearsExperience) parts.push(`${formData.yearsExperience} years of experience`);
-        if (formData.careerGoals) parts.push(`Goals: ${formData.careerGoals}`);
+        if (formData.yearsExperience) parts.push(`Experience: ${formData.yearsExperience} years`);
+        if (formData.careerGoals) parts.push(`Career goals: ${formData.careerGoals}`);
         if (formData.areasOfInterest) parts.push(`Interests: ${formData.areasOfInterest}`);
-        if (parts.length === 0) {
-          throw new Error("Please fill in at least your job title or career goals.");
-        }
-        body.career_goals = parts.join(". ");
+        requestBody.career_goals = parts.join(". ");
       }
 
-      setLoadingMessage("Finding your best programme matches...");
-
+      setLoadingMessage("Running AI pipeline (parsing → classifying → searching → synthesizing)...");
       const { data, error } = await supabase.functions.invoke("backend-proxy", {
-        body,
+        body: requestBody,
       });
 
-      if (error) {
-        throw new Error(data?.error || error.message || "Failed to get recommendations");
-      }
-
-      // Check for error in response body (e.g. backend still starting up)
-      if (data?.error) {
-        throw new Error(data.error);
-      }
-
-      if (!data?.recommendations?.length) {
-        toast({
-          title: "No recommendations returned",
-          description: "Please try again in a moment.",
-        });
-        return;
-      }
+      if (error) throw new Error(error.message || "Failed to get recommendations");
 
       // Save submission in background (don't block user)
       supabase.functions.invoke("save-submission", {
         body: {
-          name: contactName || null,
-          email: contactEmail || null,
+          name: parsedName || null,
+          email: parsedEmail || null,
           wantsInfo,
-          profile: data.profile || body,
+          profile: data.profile || {},
           recommendations: data.recommendations,
           outreachEmail: data.outreachEmail,
           inputMethod: activeTab,
@@ -133,7 +115,7 @@ const Index = () => {
   const hasInput =
     (activeTab === "form" && (formData.jobTitle || formData.careerGoals)) ||
     (activeTab === "cv" && cvFile) ||
-    (activeTab === "voice" && voiceText);
+    (activeTab === "linkedin" && linkedinText);
 
   return (
     <div className="min-h-screen bg-background">
@@ -184,8 +166,8 @@ const Index = () => {
                   <TabsTrigger value="cv" className="flex-1 gap-2">
                     <Upload className="h-4 w-4" /> Upload CV
                   </TabsTrigger>
-                  <TabsTrigger value="voice" className="flex-1 gap-2">
-                    <Mic className="h-4 w-4" /> Voice Input
+                  <TabsTrigger value="linkedin" className="flex-1 gap-2">
+                    <FileText className="h-4 w-4" /> LinkedIn
                   </TabsTrigger>
                 </TabsList>
 
@@ -268,75 +250,28 @@ const Index = () => {
                   <p className="text-sm text-muted-foreground">Your CV will be parsed by AI to extract your professional profile. No data is stored.</p>
                 </TabsContent>
 
-                <TabsContent value="voice" className="space-y-4 text-left">
+                <TabsContent value="linkedin" className="space-y-4 text-left">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
-                      <Label htmlFor="voiceName">Your Name</Label>
-                      <Input id="voiceName" placeholder="e.g. Jane Doe" value={contactName} onChange={(e) => setContactName(e.target.value)} />
+                      <Label htmlFor="liName">Your Name</Label>
+                      <Input id="liName" placeholder="e.g. Jane Doe" value={contactName} onChange={(e) => setContactName(e.target.value)} />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="voiceEmail">Your Email</Label>
-                      <Input id="voiceEmail" type="email" placeholder="e.g. jane@company.com" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
+                      <Label htmlFor="liEmail">Your Email</Label>
+                      <Input id="liEmail" type="email" placeholder="e.g. jane@company.com" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
                     </div>
                   </div>
-                  <div className="flex flex-col items-center gap-4">
-                    <Button
-                      type="button"
-                      variant={isRecording ? "destructive" : "outline"}
-                      size="lg"
-                      className="gap-2"
-                      onClick={() => {
-                        if (isRecording && recognition) {
-                          recognition.stop();
-                          setIsRecording(false);
-                        } else {
-                          const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-                          if (!SpeechRecognition) {
-                            toast({ title: "Not supported", description: "Speech recognition is not supported in your browser. Try Chrome.", variant: "destructive" });
-                            return;
-                          }
-                          const rec = new SpeechRecognition();
-                          rec.continuous = true;
-                          rec.interimResults = true;
-                          rec.lang = "en-US";
-                          let finalTranscript = voiceText;
-                          rec.onresult = (event: any) => {
-                            let interim = "";
-                            for (let i = event.resultIndex; i < event.results.length; i++) {
-                              if (event.results[i].isFinal) {
-                                finalTranscript += event.results[i][0].transcript + " ";
-                              } else {
-                                interim += event.results[i][0].transcript;
-                              }
-                            }
-                            setVoiceText(finalTranscript + interim);
-                          };
-                          rec.onerror = (event: any) => {
-                            console.error("Speech recognition error:", event.error);
-                            setIsRecording(false);
-                          };
-                          rec.onend = () => setIsRecording(false);
-                          rec.start();
-                          setRecognition(rec);
-                          setIsRecording(true);
-                        }
-                      }}
-                    >
-                      {isRecording ? <><MicOff className="h-5 w-5" /> Stop Recording</> : <><Mic className="h-5 w-5" /> Start Recording</>}
-                    </Button>
-                    {isRecording && <p className="text-sm text-primary animate-pulse">Listening... Describe your role, experience, and career goals.</p>}
-                  </div>
                   <div className="space-y-2">
-                    <Label htmlFor="voiceTranscript">Transcribed Text</Label>
-                    <Textarea id="voiceTranscript" placeholder="Your speech will appear here... You can also edit it afterwards." value={voiceText} onChange={(e) => setVoiceText(e.target.value)} rows={6} />
+                    <Label htmlFor="linkedin">LinkedIn Profile Text</Label>
+                    <Textarea id="linkedin" placeholder="Copy and paste your LinkedIn summary, experience section, or About text here..." value={linkedinText} onChange={(e) => setLinkedinText(e.target.value)} rows={8} />
                   </div>
                   <div className="flex items-center space-x-2">
-                    <Checkbox id="voiceWantsInfo" checked={wantsInfo} onCheckedChange={(checked) => setWantsInfo(checked === true)} />
-                    <Label htmlFor="voiceWantsInfo" className="text-sm font-normal cursor-pointer">
+                    <Checkbox id="liWantsInfo" checked={wantsInfo} onCheckedChange={(checked) => setWantsInfo(checked === true)} />
+                    <Label htmlFor="liWantsInfo" className="text-sm font-normal cursor-pointer">
                       I'd like to receive more information about recommended programmes
                     </Label>
                   </div>
-                  <p className="text-sm text-muted-foreground">Describe your career background and goals by speaking — we'll transcribe and analyse it.</p>
+                  <p className="text-sm text-muted-foreground">Paste your LinkedIn profile text — we'll extract your experience and skills from it.</p>
                 </TabsContent>
               </Tabs>
 
