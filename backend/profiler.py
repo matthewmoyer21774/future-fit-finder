@@ -26,39 +26,30 @@ If a field cannot be determined, use null. For skills, list the top 5-8 most rel
 
 def extract_profile(cv_text: str, career_goals: str = "") -> dict:
     """
-    Extract a structured profile from CV text using GPT-5 Nano via Lovable AI gateway.
+    Extract a structured profile from CV text using GPT-4o-mini via OpenAI API.
     Returns a dict with candidate profile fields.
     """
-    import requests
-
-    api_key = os.environ.get("LOVABLE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("No API key configured (LOVABLE_API_KEY or OPENAI_API_KEY)")
+        raise ValueError("No OPENAI_API_KEY configured")
+
+    client = OpenAI(api_key=api_key)
 
     user_message = f"CV/Resume:\n{cv_text[:6000]}"
     if career_goals:
         user_message += f"\n\nStated career goals:\n{career_goals}"
 
-    response = requests.post(
-        "https://ai.gateway.lovable.dev/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "openai/gpt-5-nano",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": 0.1,
-            "max_tokens": 500,
-        },
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.1,
+        max_tokens=500,
     )
 
-    response.raise_for_status()
-    data = response.json()
-    content = data["choices"][0]["message"]["content"].strip()
+    content = response.choices[0].message.content.strip()
 
     # Parse JSON from response (handle markdown code blocks)
     if content.startswith("```"):
