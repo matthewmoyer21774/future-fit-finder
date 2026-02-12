@@ -6,6 +6,8 @@ Loads all programmes from JSON files and passes them to GPT-4o-mini.
 import json
 import os
 import glob
+import time
+import random
 from openai import OpenAI
 
 PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
@@ -125,15 +127,26 @@ def recommend(profile: dict, categories: list[dict]) -> dict:
     # LLM synthesis
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": RECOMMEND_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0.7,
-        max_tokens=1500,
-    )
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": RECOMMEND_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.7,
+                max_tokens=1500,
+            )
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = (2 ** attempt) + random.uniform(0, 1)
+                print(f"Recommender attempt {attempt + 1} failed: {e}. Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+            else:
+                raise
 
     content = response.choices[0].message.content.strip()
 
