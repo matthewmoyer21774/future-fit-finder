@@ -6,4 +6,5 @@ python-docx
 trafilatura
 chromadb
 openai
+anthropic
 numpy

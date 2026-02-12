@@ -1,12 +1,12 @@
 """
 Programme recommender + personalised email generator.
-Loads all programmes from JSON files and passes them to GPT-4o-mini.
+Loads all programmes from JSON files and passes them to Anthropic Claude.
 """
 
 import json
 import os
 import glob
-from openai import OpenAI
+import anthropic
 
 PROGRAMME_PAGES_DIR = os.path.join(os.path.dirname(__file__), "programme_pages")
 
@@ -123,19 +123,18 @@ def recommend(profile: dict, categories: list[dict]) -> dict:
     )
 
     # LLM synthesis
-    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API"))
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1500,
+        system=RECOMMEND_PROMPT,
         messages=[
-            {"role": "system", "content": RECOMMEND_PROMPT},
             {"role": "user", "content": user_message},
         ],
-        temperature=0.7,
-        max_tokens=1500,
     )
 
-    content = response.choices[0].message.content.strip()
+    content = response.content[0].text.strip()
 
     # Parse JSON response
     if content.startswith("```"):
