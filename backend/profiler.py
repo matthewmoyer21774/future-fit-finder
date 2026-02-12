@@ -61,8 +61,8 @@ def extract_profile(cv_text: str, career_goals: str = "") -> dict:
     Extract a structured professional profile from raw CV text.
 
     The function sends the CV text (truncated to 6 000 chars to stay within
-    token limits — roughly ~1 500 tokens for English text) along with any
-    stated career goals to GPT-5 Nano.
+    token limits) along with any stated career goals to GPT-4o-mini via the
+    OpenAI SDK (matching the pattern used by classifier.py and recommender.py).
 
     Args:
         cv_text:      Raw text extracted from the candidate's CV/resume file.
@@ -73,51 +73,29 @@ def extract_profile(cv_text: str, career_goals: str = "") -> dict:
         skills, education, career_goals, seniority.  Any field that could
         not be extracted is set to None.
     """
-    import requests
-
-    # Prefer the Lovable gateway key; fall back to a direct OpenAI key
-    api_key = os.environ.get("LOVABLE_API_KEY") or os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("No API key configured (LOVABLE_API_KEY or OPENAI_API_KEY)")
-
     # -----------------------------------------------------------------------
     # Build the user message
-    # -----------------------------------------------------------------------
-    # We truncate the CV to 6 000 characters to avoid exceeding the model's
-    # context window (GPT-5 Nano supports 128k tokens, but longer inputs
-    # increase latency and cost with diminishing returns for extraction).
     # -----------------------------------------------------------------------
     user_message = f"CV/Resume:\n{cv_text[:6000]}"
     if career_goals:
         user_message += f"\n\nStated career goals:\n{career_goals}"
 
     # -----------------------------------------------------------------------
-    # Call the Lovable AI Gateway
+    # Call OpenAI directly via the SDK (same pattern as recommender.py)
     # -----------------------------------------------------------------------
-    # The gateway at ai.gateway.lovable.dev proxies requests to the
-    # appropriate LLM provider (OpenAI in this case).  We use the standard
-    # OpenAI chat completions format.
-    # -----------------------------------------------------------------------
-    response = requests.post(
-        "https://ai.gateway.lovable.dev/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "openai/gpt-5-nano",
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            "temperature": 0.1,   # Low temperature → deterministic extraction
-            "max_tokens": 500,    # Profile JSON is typically ~200–300 tokens
-        },
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=0.1,   # Low temperature → deterministic extraction
+        max_tokens=500,     # Profile JSON is typically ~200–300 tokens
     )
 
-    response.raise_for_status()
-    data = response.json()
-    content = data["choices"][0]["message"]["content"].strip()
+    content = response.choices[0].message.content.strip()
 
     # -----------------------------------------------------------------------
     # Parse the JSON response
